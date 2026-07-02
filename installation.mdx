@@ -1,0 +1,224 @@
+---
+title: "Install Codebase Memory MCP on macOS, Linux, and Windows"
+sidebarTitle: "Installation"
+description: "All installation methods for Codebase Memory MCP: one-line installer, Homebrew, AUR, npm, PyPI, Scoop, Winget, Chocolatey, go install, and build from source."
+---
+
+Codebase Memory MCP ships as a single static binary with zero runtime dependencies — no Docker, no Node.js runtime, no Python interpreter, no API keys. Every release is checksummed, signed, and scanned by 70+ antivirus engines before publication. Pick the installation method that fits your workflow: the one-line installer handles everything automatically, or choose a package manager you already use.
+
+## Platform Binaries
+
+Every release publishes pre-built, statically-linked binaries for all supported platforms, available from the [GitHub Releases page](https://github.com/DeusData/codebase-memory-mcp/releases/latest). A `checksums.txt` file with SHA-256 hashes is included in every release.
+
+| Platform | Standard | With Graph UI |
+|----------|----------|---------------|
+| macOS (Apple Silicon) | `codebase-memory-mcp-darwin-arm64.tar.gz` | `codebase-memory-mcp-ui-darwin-arm64.tar.gz` |
+| macOS (Intel) | `codebase-memory-mcp-darwin-amd64.tar.gz` | `codebase-memory-mcp-ui-darwin-amd64.tar.gz` |
+| Linux (x86_64) | `codebase-memory-mcp-linux-amd64.tar.gz` | `codebase-memory-mcp-ui-linux-amd64.tar.gz` |
+| Linux (ARM64) | `codebase-memory-mcp-linux-arm64.tar.gz` | `codebase-memory-mcp-ui-linux-arm64.tar.gz` |
+| Windows (x86_64) | `codebase-memory-mcp-windows-amd64.zip` | `codebase-memory-mcp-ui-windows-amd64.zip` |
+
+<Note>
+  The Linux release also ships a `-portable` build (e.g. `codebase-memory-mcp-linux-amd64-portable.tar.gz`) that is fully statically linked and works on older distributions such as Debian 11, RHEL 8, and Ubuntu 20.04 where the standard binary's glibc 2.38+ requirement is not met. The installer script selects the portable build automatically on Linux.
+</Note>
+
+## Quick Install
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    The installer downloads the correct binary for your OS and architecture, verifies the SHA-256 checksum, installs to `~/.local/bin`, and automatically configures all detected coding agents.
+
+    **Standard install:**
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+    ```
+
+    **With graph visualization UI** (serves at `http://localhost:9749`):
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --ui
+    ```
+
+    **Custom install directory:**
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --dir=/usr/local/bin
+    ```
+
+    **Binary only (skip agent configuration):**
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --skip-config
+    ```
+
+    If `~/.local/bin` is not in your `PATH`, the installer will print the exact line to add to your shell config:
+    ```bash
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+    ```
+  </Tab>
+  <Tab title="Windows (PowerShell)">
+    The PowerShell installer downloads and extracts the binary, verifies its checksum, installs to `%LOCALAPPDATA%\Programs\codebase-memory-mcp`, adds it to your user `PATH`, and configures all detected coding agents.
+
+    ```powershell
+    # 1. Download the installer
+    Invoke-WebRequest -Uri https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1
+
+    # 2. (Optional but recommended) Inspect the script
+    notepad install.ps1
+
+    # 3. Run it
+    .\install.ps1
+    ```
+
+    **With graph visualization UI:**
+    ```powershell
+    .\install.ps1 --ui
+    ```
+
+    **Binary only (skip agent configuration):**
+    ```powershell
+    .\install.ps1 --skip-config
+    ```
+
+    <Warning>
+      Windows SmartScreen may show a security warning for unsigned software. Click **"More info"** → **"Run anyway"**. You can independently verify the binary's integrity against `checksums.txt` published in the release.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Installer Options
+
+| Flag | Description |
+|------|-------------|
+| `--ui` | Install the UI variant, which includes the built-in 3D graph visualization server at `http://localhost:9749`. |
+| `--skip-config` | Download and install the binary only; skip automatic agent configuration. |
+| `--dir=<path>` | Install to a custom directory instead of the default (`~/.local/bin` on macOS/Linux, `%LOCALAPPDATA%\Programs\codebase-memory-mcp` on Windows). |
+
+## Package Managers
+
+<CardGroup cols={2}>
+  <Card title="Homebrew (macOS / Linux)" icon="apple">
+    ```bash
+    brew install codebase-memory-mcp
+    ```
+  </Card>
+  <Card title="AUR (Arch Linux)" icon="linux">
+    ```bash
+    yay -S codebase-memory-mcp-bin
+    ```
+    ```bash
+    paru -S codebase-memory-mcp-bin
+    ```
+    Package page: [aur.archlinux.org/packages/codebase-memory-mcp-bin](https://aur.archlinux.org/packages/codebase-memory-mcp-bin)
+  </Card>
+  <Card title="npm" icon="npm">
+    No install required — run directly with `npx`:
+    ```bash
+    npx codebase-memory-mcp
+    ```
+  </Card>
+  <Card title="PyPI (uv)" icon="python">
+    No install required — run directly with `uvx`:
+    ```bash
+    uvx codebase-memory-mcp
+    ```
+  </Card>
+  <Card title="Scoop (Windows)" icon="windows">
+    ```powershell
+    scoop install codebase-memory-mcp
+    ```
+  </Card>
+  <Card title="Winget (Windows)" icon="windows">
+    ```powershell
+    winget install codebase-memory-mcp
+    ```
+  </Card>
+  <Card title="Chocolatey (Windows)" icon="windows">
+    ```powershell
+    choco install codebase-memory-mcp
+    ```
+  </Card>
+  <Card title="go install" icon="code">
+    ```bash
+    go install github.com/DeusData/codebase-memory-mcp@latest
+    ```
+  </Card>
+</CardGroup>
+
+## Build from Source
+
+Building from source requires a C compiler, a C++ compiler, zlib, and Git. All tree-sitter grammars and other dependencies are vendored in the repository.
+
+### Prerequisites
+
+| Requirement | Check | Install |
+|-------------|-------|---------|
+| **C compiler** (gcc or clang) | `gcc --version` or `clang --version` | macOS: `xcode-select --install` · Linux: `apt install build-essential` |
+| **C++ compiler** | `g++ --version` or `clang++ --version` | Same as above |
+| **zlib** | — | macOS: included · Linux: `apt install zlib1g-dev` |
+| **Git** | `git --version` | Pre-installed on most systems |
+
+### Build commands
+
+```bash
+git clone https://github.com/DeusData/codebase-memory-mcp.git
+cd codebase-memory-mcp
+scripts/build.sh                    # standard binary
+scripts/build.sh --with-ui          # with graph visualization
+# Binary output: build/c/codebase-memory-mcp
+```
+
+Then run `./build/c/codebase-memory-mcp install` to configure your agents.
+
+## Manual MCP Configuration
+
+If you used `--skip-config` or prefer to manage your agent configuration manually, add the following to your agent's MCP configuration file.
+
+**For Claude Code** — add to `~/.claude/.mcp.json` (global) or `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "codebase-memory-mcp": {
+      "command": "/path/to/codebase-memory-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Replace `/path/to/codebase-memory-mcp` with the absolute path to the installed binary (e.g. `/home/yourname/.local/bin/codebase-memory-mcp`).
+
+Restart your agent after saving the file. In Claude Code, run `/mcp` to verify — you should see `codebase-memory-mcp` listed with **14 tools**.
+
+<Note>
+  For other agents (Codex CLI, Gemini CLI, Zed, VS Code, OpenCode, KiloCode, Aider, Antigravity, OpenClaw, Kiro), run `codebase-memory-mcp install` to let the tool write the correct config format for each agent automatically.
+</Note>
+
+## Install via Claude Code
+
+You can ask Claude Code to install the server directly using natural language:
+
+```
+"Install this MCP server: https://github.com/DeusData/codebase-memory-mcp"
+```
+
+Claude Code will handle downloading, verifying, and configuring the server.
+
+## Update
+
+```bash
+codebase-memory-mcp update
+```
+
+Checks GitHub Releases for the latest version and replaces the binary in-place. The MCP server also checks for updates on startup and notifies on the first tool call if a newer release is available.
+
+## Uninstall
+
+```bash
+codebase-memory-mcp uninstall
+```
+
+Removes all agent configuration entries, instruction files, skills, and pre-tool hooks written by the installer. The binary itself and the SQLite databases at `~/.cache/codebase-memory-mcp/` are **not** removed — delete them manually if you want a complete clean:
+
+```bash
+rm -rf ~/.cache/codebase-memory-mcp/
+rm ~/.local/bin/codebase-memory-mcp
+```

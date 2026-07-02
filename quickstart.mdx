@@ -1,47 +1,191 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Codebase Memory MCP in 2 Minutes"
+sidebarTitle: "Quickstart"
+description: "Install Codebase Memory MCP, connect it to your AI coding agent, and index your first repository in under 2 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+Codebase Memory MCP installs as a single static binary, auto-configures every coding agent it finds on your machine, and is ready to index your first project the moment you restart your agent. The entire flow — download, verify, install, configure — takes under two minutes on any platform.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Get Up and Running
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Install Codebase Memory MCP">
+    Run the one-line installer for your platform. The script downloads the binary, verifies its SHA-256 checksum, installs it to `~/.local/bin` (macOS/Linux) or `%LOCALAPPDATA%\Programs\codebase-memory-mcp` (Windows), and automatically configures every coding agent it detects.
 
-    ```bash
-    npm install your-package
-    ```
+    <Tabs>
+      <Tab title="macOS / Linux">
+        **Standard install:**
+        ```bash
+        curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+        ```
+
+        **With graph visualization UI** (opens at `http://localhost:9749`):
+        ```bash
+        curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --ui
+        ```
+      </Tab>
+      <Tab title="Windows (PowerShell)">
+        ```powershell
+        # 1. Download the installer
+        Invoke-WebRequest -Uri https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1
+
+        # 2. (Optional but recommended) Inspect the script
+        notepad install.ps1
+
+        # 3. Run it
+        .\install.ps1
+        ```
+
+        <Note>
+          Windows SmartScreen may show a warning for unsigned software. Click **"More info"** → **"Run anyway"**. You can independently verify integrity using `checksums.txt` published with every release.
+        </Note>
+      </Tab>
+    </Tabs>
+
+    The installer prints which agents it detected and configured. If `~/.local/bin` is not in your `PATH`, it will tell you exactly which line to add to your shell config.
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
-    ```
+  <Step title="Restart your coding agent">
+    The installer automatically writes MCP server entries, instruction files, and pre-tool hooks for every agent it detects — including Claude Code, Codex CLI, Gemini CLI, Zed, VS Code, OpenCode, Aider, KiloCode, Antigravity, OpenClaw, and Kiro.
+
+    **Restart your agent now** so it picks up the new MCP configuration. In Claude Code you can verify the connection with `/mcp` — you should see `codebase-memory-mcp` listed with **14 tools**.
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
+  <Step title="Index your first project">
+    Open your agent inside (or pointed at) a project directory and say:
+
+    > **"Index this project"**
+
+    Your agent will translate that into the `index_repository` tool call:
+
+    ```json
+    {
+      "tool": "index_repository",
+      "arguments": {
+        "repo_path": "/absolute/path/to/your/project"
+      }
+    }
+    ```
+
+    Indexing runs entirely in memory (LZ4-compressed, in-memory SQLite). An average repository completes in seconds. The Linux kernel — 28M lines of code across 75K files — indexes in 3 minutes. After the first index, a background watcher detects file changes and re-indexes automatically.
+
+    <Tip>
+      Always pass an **absolute path** to `index_repository`. If `trace_path` returns zero results, use `search_graph` first to find the exact symbol name in the graph.
+    </Tip>
+  </Step>
+
+  <Step title="Run your first query">
+    Once indexed, ask questions about your codebase in plain English. Your agent maps natural language to MCP tool calls and returns structured answers.
+
+    **Trace who calls a function:**
+    ```json
+    {
+      "tool": "trace_path",
+      "arguments": {
+        "function_name": "ProcessOrder",
+        "direction": "inbound",
+        "depth": 3
+      }
+    }
+    ```
+
+    **Search for all HTTP route handlers:**
+    ```json
+    {
+      "tool": "search_graph",
+      "arguments": {
+        "label": "Route",
+        "name_pattern": ".*"
+      }
+    }
+    ```
+
+    **Get a full architecture overview:**
+    ```json
+    {
+      "tool": "get_architecture",
+      "arguments": {}
+    }
     ```
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## First Queries to Try
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+These four queries cover the most common code intelligence tasks and are a great way to immediately see the value of the knowledge graph.
+
+### "What calls ProcessOrder?"
+
+> *"What calls ProcessOrder?"*
+
+```json
+{
+  "tool": "trace_path",
+  "arguments": {
+    "function_name": "ProcessOrder",
+    "direction": "inbound"
+  }
+}
+```
+
+Returns every function in the inbound call chain — across files, packages, and inheritance hierarchies — using BFS traversal. Set `direction` to `"outbound"` to see what `ProcessOrder` calls, or `"both"` for the full tree.
+
+---
+
+### "Find all HTTP handlers"
+
+> *"Find all HTTP handlers in the codebase"*
+
+```json
+{
+  "tool": "search_graph",
+  "arguments": {
+    "label": "Route",
+    "name_pattern": ".*"
+  }
+}
+```
+
+REST endpoints are first-class `Route` nodes in the graph. You can also filter by `name_pattern` (regex), `file_pattern`, minimum/maximum node degree, and paginate with `limit`/`offset`.
+
+---
+
+### "Get architecture overview"
+
+> *"Give me an architecture overview"*
+
+```json
+{
+  "tool": "get_architecture",
+  "arguments": {}
+}
+```
+
+Returns languages, packages, entry points, HTTP routes, hotspots (highest-degree nodes), boundaries, layers, and community clusters in a single call — ideal as a first query on an unfamiliar codebase.
+
+---
+
+### Cypher query
+
+> *"Find all functions that are never called"*
+
+```json
+{
+  "tool": "query_graph",
+  "arguments": {
+    "query": "MATCH (f:Function) WHERE NOT EXISTS { (f)<-[:CALLS]-() } RETURN f.name, f.file LIMIT 20"
+  }
+}
+```
+
+`query_graph` accepts an openCypher read subset. Full Cypher support includes `MATCH`, `WHERE`, `WITH`, `RETURN`, `ORDER BY`, `LIMIT`, variable-length paths (`[*1..3]`), and aggregates (`count`, `collect`, `sum`).
+
+---
+
+<Tip>
+  **Orient yourself on any new project** with two calls: `list_projects` (shows all indexed projects with node/edge counts) and `get_graph_schema` (shows node labels, relationship types, and property definitions). These two tools tell you exactly what is in the graph before you start querying.
 </Tip>
+
+<Note>
+  **Graph visualization UI** — if you installed with `--ui`, start the server with `codebase-memory-mcp --ui=true --port=9749` and open `http://localhost:9749` in your browser. You will see a 3D interactive graph of your entire codebase. The UI runs as a background thread alongside the MCP server and is available whenever your agent is connected.
+</Note>

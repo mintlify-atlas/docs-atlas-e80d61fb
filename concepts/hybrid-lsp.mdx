@@ -1,0 +1,113 @@
+---
+title: "Hybrid LSP: Semantic Type Resolution Without a Language Server"
+sidebarTitle: "Hybrid LSP"
+description: "Hybrid LSP resolves types, generics, and inheritance across files inside the static binary — no language server process, no per-project setup, no API keys."
+---
+
+Tree-sitter gives you a precise syntactic AST for any of the 158 languages Codebase Memory MCP understands — fast, correct, and zero-configuration. But syntax alone has a ceiling. When your code calls `user.profile.display_name()`, tree-sitter can see the call site. What it cannot tell you is that `profile` is of type `Profile` (declared in a different module), and that `display_name` resolves to `Profile.display_name` three files away — because that requires tracking imports, following generics, walking inheritance chains, and understanding stdlib type annotations. Without that knowledge, the `CALLS` edge in your graph points to an ambiguous short name rather than the precise qualified target.
+
+**Hybrid LSP** closes this gap. It is a lightweight C implementation of language type-resolution algorithms embedded directly into the static binary — structurally inspired by and compatible with the major language servers: tsserver/typescript-go, pyright, gopls, Roslyn, Eclipse JDT, and rust-analyzer. No language server process to start, no per-project setup, no API key, no network call. It runs automatically alongside tree-sitter on every parse and refines `CALLS`, `USAGE`, and `RESOLVED_CALLS` edges with the type information that makes your graph IDE-accurate.
+
+---
+
+## Two-Layer Architecture
+
+The indexing pipeline applies two distinct passes to every file:
+
+<Steps>
+  <Step title="Tree-sitter pass">
+    Fast, syntactic, and universal — runs for every one of the 158 supported languages. Extracts definitions (functions, classes, methods, types), call sites, import declarations, and structural edges (`DEFINES`, `CONTAINS_*`, `IMPORTS`). This pass is always active.
+  </Step>
+  <Step title="Hybrid LSP pass">
+    Type-aware and language-specific. Runs above the tree-sitter pass for the eleven supported languages. Consumes the import graph and a pre-built cross-file definition registry to refine call edges: `CALLS` edges get resolved to fully-qualified targets, `USAGE` edges are typed, and `RESOLVED_CALLS` records the resolution strategy and confidence score. Languages without a Hybrid LSP pass fall back gracefully to textual resolution — you always get *some* answer.
+  </Step>
+</Steps>
+
+The cross-file Hybrid LSP build happens once per index run, using a module-def index (inspired by gopls's per-package summary pattern) to filter the global definition set down to only the defs each file actually imports — typically 50–100× smaller than the full project-wide set, which keeps per-file resolve time flat on large repos like Kubernetes (110K defs across 11K files).
+
+---
+
+## Languages
+
+<Note>
+All eleven languages are available out of the box — no additional downloads, no language server processes, no configuration. Hybrid LSP is compiled into the binary.
+</Note>
+
+| Language | What Hybrid LSP Handles |
+|----------|------------------------|
+| **Python** *(v0.7.0+)* | Imports and dotted submodule walks; dataclasses; `Self` return types; generics; `@property`; `match/case` class patterns; SQLAlchemy 2.0 `Mapped[T]`; Pydantic `BaseModel`; `typing.Annotated` / `ClassVar` / `Final` / `InitVar`; async/await; `classmethod` / `staticmethod`; narrowing (`isinstance` / `is not None` / walrus operator); `typing.cast` / `assert_type`; common stdlib (logging, pathlib, json, functools). Targets ~95% resolution on idiomatic code. |
+| **TypeScript / JavaScript / JSX / TSX** | Generics with type-parameter substitution; JSX component dispatch (resolving `<Button />` to the `Button` function or class); JSDoc inference for plain `.js` files; `.d.ts` declaration file resolution; module re-exports (`export { X } from './y'`); method chaining via return-type propagation; per-file overlay chained to a shared cross-file registry. |
+| **PHP** *(v0.7.0+)* | Namespaces; traits (including method resolution order); late-static-binding (`static::`); PHPDoc inference (`@param`, `@return`); parameter binding; return-type inference. |
+| **C#** *(v0.7.0+)* | Global `using` directives; file-scoped namespaces; records (including C# 12 primary constructors); LINQ method syntax; `async Task<T>` / `ValueTask<T>` unwrapping; generic methods; `this` / `base` dispatch; `var` inference; common BCL stdlib types. |
+| **Go** *(sharpened in v0.7.0)* | Pre-built per-package cross-file registry; generics; embedded structs; implicit interface satisfaction (the same algorithm used by gopls); package-aware import resolution. |
+| **C / C++** *(sharpened in v0.7.0)* | Shared per-language cross-file registry covering both C and C++; C side: macros, `typedef` chains, header-vs-source linking; C++ side: templates, namespaces, `auto` inference, method resolution via class hierarchy. Also covers CUDA. |
+| **Java** *(v0.8.0+)* | Single-type, on-demand, and static imports; class hierarchies with `this` / `super` dispatch; generics; annotations; overload matching by arity and parameter types; lambdas and method references bound to functional interfaces; field-type inference; common JDK stdlib types. |
+| **Kotlin** *(v0.8.0+)* | Imports and same-package resolution; classes, objects, and companion objects; extension functions; data classes; nullable-type unwrapping; scope functions (`let` / `apply` / `run` / `also` / `with`); infix calls; common stdlib types. |
+| **Rust** *(v0.8.0+)* | `use` declarations and module paths; `impl` blocks and trait methods; struct fields; generics with trait bounds; operator-trait desugaring (e.g. `+` → `Add::add`); derive-macro method synthesis (`#[derive(Debug, Clone)]`); Uniform Function Call Syntax (UFCS) static paths; common `std` prelude. |
+
+---
+
+## What This Means for Your Graph
+
+The practical impact is on `CALLS` edge accuracy. Without Hybrid LSP, a call like `user.profile.display_name()` in Python produces a `CALLS` edge from the enclosing function to a short name `display_name` with no module qualification — useful, but ambiguous if `display_name` appears in multiple files.
+
+With Hybrid LSP, the resolution chain looks like this:
+
+1. The per-file Python LSP sees `user` → its type annotation resolves to `User` (same module).
+2. `user.profile` → the `profile` field is typed `Profile` (imported from `myapp.models`).
+3. `profile.display_name()` → `Profile.display_name` is found in the cross-file registry under `myapp.models`.
+4. A `CALLS` edge is emitted from `current_function` to `myapp.models.profile.Profile.display_name` with strategy `lsp_cross_field_chain` and confidence `0.92`.
+
+That edge is now traversable by `trace_path`, accurate for dead-code detection, and correctly counted in `display_name`'s in-degree — making it visible to hotspot analysis.
+
+```cypher
+-- Find all callers of Profile.display_name resolved via Hybrid LSP
+MATCH (caller)-[e:CALLS]->(target)
+WHERE target.qualified_name = 'myapp.models.profile.Profile.display_name'
+RETURN caller.name, e.confidence, e.strategy
+ORDER BY e.confidence DESC
+```
+
+---
+
+## Fallback Behavior
+
+For the 147 languages not covered by Hybrid LSP, the pipeline falls back to **textual resolution**: the registry resolver matches callee names by short name, then by module proximity, then by import map lookup. You always get a graph — the edges are just less precisely qualified. The confidence score on each edge tells you which strategy was used:
+
+| Strategy | Meaning |
+|----------|---------|
+| `lsp_cross_*` | Hybrid LSP resolved the call across files with type information |
+| `same_module` | Callee is in the same module as the caller |
+| `import_map` | Callee was found via an explicit import statement |
+| `short_name` | Matched by bare function name only (lowest confidence) |
+
+A confidence floor of `0.6` is applied to Hybrid LSP resolutions — results below that threshold fall through to the registry resolver, preventing speculative type-guesses from polluting the graph.
+
+---
+
+## Design Inspiration
+
+Hybrid LSP is not a fork of any language server. It is an **independent C implementation** of the same type-resolution algorithms that major language servers use, structurally compatible with their resolution semantics:
+
+<CardGroup cols={2}>
+  <Card title="tsserver / typescript-go" icon="code">
+    Module overlay, `.d.ts` resolution, JSX component dispatch, JSDoc inference
+  </Card>
+  <Card title="pyright" icon="code">
+    Import graph walking, `Annotated` / `ClassVar` / `Final`, narrowing, dataclasses
+  </Card>
+  <Card title="gopls" icon="code">
+    Per-package summary registry, embedded struct promotion, interface satisfaction
+  </Card>
+  <Card title="Roslyn" icon="code">
+    File-scoped namespaces, records, global usings, `var` inference, LINQ
+  </Card>
+  <Card title="Eclipse JDT" icon="code">
+    On-demand imports, overload matching by arity, lambda/method-reference binding
+  </Card>
+  <Card title="rust-analyzer" icon="code">
+    Trait method resolution, UFCS static paths, derive-macro synthesis
+  </Card>
+</CardGroup>
+
+The result is a knowledge graph accurate enough to drive `trace_path` across package boundaries, inheritance hierarchies, and stdlib calls — with no per-project setup and no running processes beyond the MCP server itself.

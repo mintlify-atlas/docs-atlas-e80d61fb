@@ -1,0 +1,101 @@
+---
+title: "Explore Your Knowledge Graph in 3D with the Graph Visualization UI"
+sidebarTitle: "Graph Visualization"
+description: "The optional UI variant of Codebase Memory MCP serves an interactive 3D graph at localhost:9749 alongside the MCP server."
+---
+
+Codebase Memory MCP ships an optional built-in graph visualization UI that renders your entire knowledge graph as an interactive 3D scene directly in your browser. Functions, call chains, modules, HTTP routes, and cross-service links all appear as navigable nodes and edges — no external tool, no Gephi export, no separate graph database required. The UI is bundled as an embedded HTTP server inside the binary and runs as a background thread alongside the MCP server, so it is available whenever your agent is connected.
+
+<Note>
+  The 3D visualization renders functions, call chains, modules, and HTTP routes as navigable nodes and edges directly in your browser — no external tool or separate graph database required.
+</Note>
+
+## Getting the UI Variant
+
+The standard binary does **not** include the UI. You need to specifically download or install the `ui` variant.
+
+<Tabs>
+  <Tab title="One-Line Install (macOS / Linux)">
+    Pass the `--ui` flag to the install script:
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --ui
+    ```
+  </Tab>
+  <Tab title="Manual Download">
+    Download a `codebase-memory-mcp-ui-*` archive from the [latest release](https://github.com/DeusData/codebase-memory-mcp/releases/latest) for your platform:
+
+    | Platform | UI Archive |
+    |----------|-----------|
+    | macOS (Apple Silicon) | `codebase-memory-mcp-ui-darwin-arm64.tar.gz` |
+    | macOS (Intel) | `codebase-memory-mcp-ui-darwin-amd64.tar.gz` |
+    | Linux (x86_64) | `codebase-memory-mcp-ui-linux-amd64.tar.gz` |
+    | Linux (ARM64) | `codebase-memory-mcp-ui-linux-arm64.tar.gz` |
+    | Windows (x86_64) | `codebase-memory-mcp-ui-windows-amd64.zip` |
+
+    Each archive contains its own `install.sh` (or `install.ps1` on Windows):
+
+    ```bash
+    tar xzf codebase-memory-mcp-ui-*.tar.gz
+    ./install.sh
+    ```
+  </Tab>
+  <Tab title="Build from Source">
+    Pass `--with-ui` to the build script:
+
+    ```bash
+    git clone https://github.com/DeusData/codebase-memory-mcp.git
+    cd codebase-memory-mcp
+    scripts/build.sh --with-ui
+    ```
+  </Tab>
+</Tabs>
+
+## Starting the UI Server
+
+Once you have the UI variant installed, start it with:
+
+```bash
+codebase-memory-mcp --ui=true --port=9749
+```
+
+Then open [http://localhost:9749](http://localhost:9749) in your browser.
+
+<Note>
+  The `--port` flag defaults to `9749`. You can change it to any available port. The MCP server (stdio) continues to run normally alongside the UI — your agent connection is not affected.
+</Note>
+
+## What You Can Explore
+
+The 3D graph scene renders every node and relationship in your knowledge graph. Pan, zoom, and rotate to navigate large codebases:
+
+<CardGroup cols={2}>
+  <Card title="Functions & Call Chains" icon="arrow-right-arrow-left">
+    Follow `CALLS` edges visually to trace execution paths through your codebase — the same traversal that `trace_path` performs, rendered as an interactive graph.
+  </Card>
+  <Card title="Modules & Packages" icon="box">
+    See how packages cluster around each other. Louvain community detection groups tightly coupled nodes, so functional boundaries appear as natural visual clusters.
+  </Card>
+  <Card title="HTTP Routes" icon="route">
+    `Route` nodes appear as first-class entities. `HTTP_CALLS` edges show cross-service dependencies as visible links between clusters.
+  </Card>
+  <Card title="Cross-Service Links" icon="link">
+    gRPC, GraphQL, tRPC, and pub-sub channel connections (`EMITS` / `LISTENS_ON`) are all rendered as labeled edges, making multi-service architectures immediately visible.
+  </Card>
+</CardGroup>
+
+## Multi-Galaxy Layout
+
+When you have indexed multiple repositories under the same store, the UI switches to a **multi-galaxy layout**: each repository forms its own spatial cluster (galaxy), and `CROSS_*` edges connecting nodes across repositories appear as long arcs bridging the galaxies. This makes cross-repo architecture immediately visible — you can see which services call each other, which packages are shared, and where your system's real boundaries lie.
+
+<Tip>
+  Index all your microservices or related monorepos with `cli index_repository` one by one. They share the same SQLite store and the cross-repo links are resolved automatically during indexing.
+</Tip>
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| UI not loading at `localhost:9749` | Confirm you downloaded the `ui` variant (not the standard binary) and passed `--ui=true` at startup. |
+| Port already in use | Choose a different port: `--port=9750` |
+| Graph is empty | Index at least one repository first: `codebase-memory-mcp cli index_repository '{"repo_path": "/abs/path"}'` |

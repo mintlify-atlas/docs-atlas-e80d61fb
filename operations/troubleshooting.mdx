@@ -1,0 +1,202 @@
+---
+title: "Troubleshoot Codebase Memory MCP: Common Issues and Fixes"
+sidebarTitle: "Troubleshooting"
+description: "Fix common Codebase Memory MCP issues: server not showing in /mcp, indexing failures, empty query results, binary not found, and memory diagnostics."
+---
+
+Codebase Memory MCP runs **100% locally and collects no telemetry** — your code, queries, environment variables, and usage patterns never leave your machine. That privacy guarantee is unconditional, but it also means that when something goes wrong, all the diagnostic data lives on your machine too. This page covers the most common issues, how to resolve them, and how to capture the information needed to file a useful bug report.
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="/mcp doesn't show the server">
+    **Symptom:** Running `/mcp` in your agent shows no `codebase-memory-mcp` entry, or the server appears disconnected.
+
+    **Fixes:**
+
+    1. **Check that the path in `.mcp.json` is absolute.** Relative paths are not resolved by most agents.
+
+       ```json
+       {
+         "mcpServers": {
+           "codebase-memory-mcp": {
+             "command": "/Users/yourname/.local/bin/codebase-memory-mcp",
+             "args": []
+           }
+         }
+       }
+       ```
+
+    2. **Restart your agent.** MCP server configuration is read at startup — changes to `.mcp.json` require a full agent restart.
+
+    3. **Test the binary directly.** Run the following in your terminal — if the binary is working, it should immediately output a JSON response:
+
+       ```bash
+       echo '{}' | /path/to/codebase-memory-mcp
+       ```
+
+       If this produces no output or an error, the binary path is wrong or the binary is not executable.
+  </Accordion>
+
+  <Accordion title="index_repository fails or returns an error">
+    **Symptom:** Calling `index_repository` returns an error or the tool call fails immediately.
+
+    **Fix:** Always pass an **absolute path** to `repo_path`. Relative paths and `~` expansion are not supported.
+
+    ```
+    index_repository(repo_path="/absolute/path/to/your/project")
+    ```
+
+    If you are unsure of the absolute path, run `pwd` in the project directory to get it.
+  </Accordion>
+
+  <Accordion title="trace_path returns 0 results">
+    **Symptom:** `trace_path` or `trace_call_path` returns an empty result even though you know the function exists.
+
+    **Fix:** The function name must match exactly as it is stored in the graph. Use `search_graph` first to discover the exact name:
+
+    ```
+    search_graph(name_pattern=".*PartialName.*")
+    ```
+
+    The results include the precise qualified names you can pass to `trace_path`. Copy-paste the name rather than typing it manually.
+  </Accordion>
+
+  <Accordion title="Queries return results from the wrong project">
+    **Symptom:** Search or query results include nodes from a different project than the one you are working on, or results seem mixed across repositories.
+
+    **Fix:** Add the `project` parameter to scope the query to a specific indexed project. Use `list_projects` to see the exact project names:
+
+    ```
+    list_projects()
+    ```
+
+    Then scope subsequent queries:
+
+    ```
+    search_graph(name_pattern=".*Handler.*", project="my-project-name")
+    ```
+  </Accordion>
+
+  <Accordion title="Binary not found after install">
+    **Symptom:** After running the installer, your shell reports `command not found: codebase-memory-mcp`.
+
+    **Fix:** The installer places the binary in `~/.local/bin/`, which may not be on your `PATH`. Add it:
+
+    ```bash
+    export PATH="$HOME/.local/bin:$PATH"
+    ```
+
+    To make this permanent, add the line to your `~/.bashrc`, `~/.zshrc`, or equivalent shell configuration file, then open a new terminal.
+  </Accordion>
+
+  <Accordion title="Graph UI not loading">
+    **Symptom:** Navigating to `http://localhost:9749` shows nothing, connection refused, or a blank page.
+
+    **Fixes:**
+
+    1. **Confirm you downloaded the `ui` variant.** The standard binary does not include the graph visualization server. Check that your archive name contains `-ui-`, for example `codebase-memory-mcp-ui-darwin-arm64.tar.gz`.
+
+    2. **Start the server with `--ui=true`:**
+
+       ```bash
+       codebase-memory-mcp --ui=true --port=9749
+       ```
+
+    3. **Check the port.** The default UI port is `9749`. If you changed it, navigate to the correct port: `http://localhost:<port>`.
+
+    4. **Check for a conflicting process** already bound to that port:
+
+       ```bash
+       lsof -i :9749
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Diagnostics
+
+When a problem is hard to reproduce — a slow memory climb over hours, a performance regression, a suspected leak — the diagnostics subsystem lets you capture a resource trajectory that pinpoints the issue without exposing any of your source code or queries.
+
+### Enabling Diagnostics
+
+Set `CBM_DIAGNOSTICS=1` before the MCP server starts, then reproduce the problem. Let it run as long as it takes: a slow leak needs time to show in the trend.
+
+**In your agent's MCP config `env` block** (recommended — the variable is set every time the server starts):
+
+```json
+{
+  "mcpServers": {
+    "codebase-memory-mcp": {
+      "command": "/path/to/codebase-memory-mcp",
+      "args": [],
+      "env": {
+        "CBM_DIAGNOSTICS": "1"
+      }
+    }
+  }
+}
+```
+
+**Or export it before launching manually:**
+
+```bash
+export CBM_DIAGNOSTICS=1
+codebase-memory-mcp
+```
+
+### Output Files
+
+The server writes two files to your system temp directory (`$TMPDIR` or `/tmp` on macOS/Linux, `%TEMP%` on Windows):
+
+| File | Contents |
+|------|----------|
+| `cbm-diagnostics-<pid>.ndjson` | **The memory trajectory** — one JSON line every 5 seconds with `rss`, `committed` (Windows commit charge), `peak_*`, `page_faults`, `fd`, and `queries`. Kept on disk after the server exits. Rotates to `.ndjson.1` past ~8 MB. |
+| `cbm-diagnostics-<pid>.json` | The latest snapshot only — useful for a quick live check. Removed on clean exit. |
+
+The startup log prints both paths:
+
+```
+level=info msg=diagnostics.start snapshot=/tmp/cbm-diagnostics-12345.json trajectory=/tmp/cbm-diagnostics-12345.ndjson interval=5s
+```
+
+### What to Include in Bug Reports
+
+When filing a memory or performance issue, **attach the `.ndjson` trajectory file**. It contains no source code, no query text, and no project paths — only resource counters over time. The trend in `rss`/`committed` relative to query count is exactly what is needed to identify a leak.
+
+If you prefer not to attach a file, paste it (or a summary from your agent) directly into the issue. Your agent can read the NDJSON directly and report whether `rss` or `committed` grow monotonically, how fast, and relative to query activity.
+
+## Log Levels
+
+For verbose output during debugging, set `CBM_LOG_LEVEL=debug` before starting the server. Logs are written to **stderr** — stdout is reserved for MCP JSON-RPC messages.
+
+```bash
+export CBM_LOG_LEVEL=debug
+codebase-memory-mcp
+```
+
+Accepted values (case-insensitive): `debug`, `info`, `warn`, `error`, `none`, or their numeric equivalents `0`–`4`.
+
+<Note>
+  Setting `CBM_LOG_LEVEL=debug` in a running agent session will produce verbose output in the agent's console or log pane, not in your terminal. Check your agent's MCP server log view.
+</Note>
+
+## Reset and Rebuild
+
+If you need a clean slate — corrupted index, schema mismatch after a major version upgrade, or unexpected query results you cannot explain — wipe all indexes:
+
+```bash
+rm -rf ~/.cache/codebase-memory-mcp/
+```
+
+<Warning>
+  This deletes **all** indexed project graphs, configuration, and Architecture Decision Records stored by Codebase Memory MCP. Re-indexing your projects will rebuild everything from source.
+</Warning>
+
+After wiping, restart your agent and run `index_repository` again for each project.
+
+## Getting Help
+
+If the fixes above do not resolve your issue:
+
+1. Check the [GitHub Issues](https://github.com/DeusData/codebase-memory-mcp/issues) to see if it has already been reported or discussed.
+2. Open a new issue with: your OS and architecture, the version of Codebase Memory MCP (`codebase-memory-mcp --version`), steps to reproduce, and — for memory or performance issues — the `.ndjson` diagnostics trajectory.

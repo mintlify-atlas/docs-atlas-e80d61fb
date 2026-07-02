@@ -1,0 +1,134 @@
+---
+title: "Configure Codebase Memory MCP Settings and File Filters"
+sidebarTitle: "Configuration"
+description: "Manage auto-indexing, file limits, custom extensions, cache directory, and log levels via the config subcommand and .codebase-memory.json files."
+---
+
+Codebase Memory MCP ships with sensible defaults out of the box, but several settings are worth tuning for your workflow — especially auto-indexing behaviour and the file extensions the indexer recognises. Settings live in two places: a persistent key-value store managed by the `config` subcommand, and optional JSON files in your project or home directory for extension mapping.
+
+## The `config` Subcommand
+
+```bash
+# Show all current settings and their values
+codebase-memory-mcp config list
+
+# Set a value
+codebase-memory-mcp config set auto_index true
+codebase-memory-mcp config set auto_index_limit 50000
+
+# Reset a key back to its built-in default
+codebase-memory-mcp config reset auto_index
+```
+
+You can also read a single key:
+
+```bash
+codebase-memory-mcp config get auto_index
+```
+
+### Available Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `auto_index` | bool | `false` | Enable automatic indexing on MCP session start. New projects are indexed immediately; previously-indexed projects are registered with the background watcher. |
+| `auto_index_limit` | int | `50000` | Maximum number of files to consider when auto-indexing a new project. Projects larger than this limit are skipped until indexed explicitly. |
+| `ui-lang` | string | `auto` | Pin the graph UI display language. Accepted values: `en`, `zh`, or `auto` (follows browser locale). |
+
+<Tip>
+  `auto_index` is off by default to give you explicit control over which projects are indexed. Enable it once you are comfortable with the tool — it makes the graph available immediately whenever you open a project.
+</Tip>
+
+## Custom File Extensions
+
+By default, the indexer recognises files by their standard extension. You can map additional extensions to supported languages using JSON config files — useful for framework-specific conventions like `.blade.php` (Laravel), `.mjs` (ES modules), or `.phtml` (legacy PHP templates).
+
+### Per-Project Config
+
+Create `.codebase-memory.json` in your repository root:
+
+```json
+{
+  "extra_extensions": {
+    ".blade.php": "php",
+    ".mjs": "javascript"
+  }
+}
+```
+
+This file only applies to the repository it lives in. Commit it to share the mapping with your team.
+
+### Global Config
+
+Create (or edit) `~/.config/codebase-memory-mcp/config.json` (or `$XDG_CONFIG_HOME/codebase-memory-mcp/config.json` if `XDG_CONFIG_HOME` is set):
+
+```json
+{
+  "extra_extensions": {
+    ".twig": "html",
+    ".phtml": "php"
+  }
+}
+```
+
+This applies to every project indexed on your machine.
+
+<Note>
+  **Precedence**: per-project config overrides global config for any conflicting extension key. Unknown language values (values that don't match any bundled grammar) are silently skipped. Missing config files are ignored without error.
+</Note>
+
+## File Ignore Patterns
+
+The indexer uses a layered ignore system, evaluated in order:
+
+<Steps>
+  <Step title="Hardcoded patterns">
+    Always ignored regardless of any config: `.git`, `node_modules`, and similar build artifact / dependency directories compiled into the binary.
+  </Step>
+  <Step title=".gitignore hierarchy">
+    The full `.gitignore` hierarchy is respected, including nested `.gitignore` files in subdirectories. Symlinks are always skipped.
+  </Step>
+  <Step title=".cbmignore">
+    Create a `.cbmignore` file in your project root using the same syntax as `.gitignore` to add project-specific ignore patterns that you don't want in `.gitignore` itself.
+
+    ```
+    # .cbmignore
+    fixtures/
+    *.generated.ts
+    vendor/large-third-party/
+    ```
+  </Step>
+</Steps>
+
+## Persistence Directory
+
+All SQLite databases are stored at `~/.cache/codebase-memory-mcp/` by default. Override this with the `CBM_CACHE_DIR` environment variable:
+
+```bash
+export CBM_CACHE_DIR=~/my-projects/cbm-data
+```
+
+To completely reset all indexed data:
+
+```bash
+rm -rf ~/.cache/codebase-memory-mcp/
+```
+
+<Warning>
+  This deletes **all** project indexes and config settings. You will need to re-index all projects afterwards.
+</Warning>
+
+## Environment Variables
+
+For full details on all environment variables — including `CBM_CACHE_DIR`, `CBM_LOG_LEVEL`, `CBM_WORKERS`, `CBM_DIAGNOSTICS`, `CBM_DUMP_VERIFY_MIN_RATIO`, and `CBM_DOWNLOAD_URL` — see the [Environment Variables](/reference/environment-variables) reference page.
+
+A quick example for the two most commonly needed variables:
+
+```bash
+# Store indexes in a custom directory
+export CBM_CACHE_DIR=~/my-projects/cbm-data
+
+# Increase log verbosity for debugging
+export CBM_LOG_LEVEL=debug
+```
+
+Logs go to `stderr`; `stdout` is reserved for MCP JSON-RPC. Set `CBM_LOG_LEVEL=none` to suppress all output.

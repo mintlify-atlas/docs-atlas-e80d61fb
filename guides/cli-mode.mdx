@@ -1,0 +1,137 @@
+---
+title: "Using Codebase Memory MCP from the Command Line"
+sidebarTitle: "CLI Mode"
+description: "Every MCP tool is accessible from the terminal via `codebase-memory-mcp cli <tool> <json>`. Use --raw with jq for scripting and automation."
+---
+
+Every one of the 14 MCP tools is directly accessible from the terminal — no agent, no MCP client, no JSON-RPC handshake required. CLI mode is ideal for CI/CD pipelines, shell scripts, quick one-off queries, and debugging the knowledge graph without opening an IDE.
+
+## CLI Syntax
+
+```bash
+codebase-memory-mcp cli <tool_name> '<json_args>'
+```
+
+Pass the tool name followed by a single JSON string containing the tool's arguments. Quotes and escaping follow your shell's normal rules.
+
+## Common Examples
+
+```bash
+# Index a repository
+codebase-memory-mcp cli index_repository '{"repo_path": "/path/to/repo"}'
+
+# Search for functions matching a pattern
+codebase-memory-mcp cli search_graph '{"name_pattern": ".*Handler.*", "label": "Function"}'
+
+# Trace callers and callees of a function
+codebase-memory-mcp cli trace_path '{"function_name": "Search", "direction": "both"}'
+
+# Run a Cypher-like graph query
+codebase-memory-mcp cli query_graph '{"query": "MATCH (f:Function) RETURN f.name LIMIT 5"}'
+
+# List all indexed projects
+codebase-memory-mcp cli list_projects
+
+# Pipe raw JSON output to jq
+codebase-memory-mcp cli --raw search_graph '{"label": "Function"}' | jq '.results[].name'
+```
+
+### The `--raw` Flag
+
+By default, CLI output is formatted for human readability. Add `--raw` before the tool name to get unformatted JSON on stdout, suitable for piping to `jq` or other tools:
+
+```bash
+codebase-memory-mcp cli --raw search_graph '{"label": "Function"}' | jq '.results[].name'
+```
+
+## Management Commands
+
+These top-level commands control the binary and agent configuration — they are separate from the `cli` subcommand and do not take JSON arguments.
+
+<CodeGroup>
+
+```bash Install & Remove
+# Auto-detect and configure all installed agents
+codebase-memory-mcp install
+
+# Remove all agent configs, hooks, and instruction files
+codebase-memory-mcp uninstall
+```
+
+```bash Update
+# Update to the latest release
+codebase-memory-mcp update
+```
+
+```bash Configuration
+# Show all current settings
+codebase-memory-mcp config list
+
+# Set a configuration value
+codebase-memory-mcp config set <key> <value>
+
+# Reset a key to its default value
+codebase-memory-mcp config reset <key>
+```
+
+```bash Version
+# Print the current version
+codebase-memory-mcp --version
+```
+
+</CodeGroup>
+
+## Auto-Index Configuration
+
+Enable automatic indexing so that new projects are indexed the moment an MCP session starts:
+
+```bash
+codebase-memory-mcp config set auto_index true
+```
+
+Limit how many files are considered for auto-indexing (default is 50,000):
+
+```bash
+codebase-memory-mcp config set auto_index_limit 50000
+```
+
+When `auto_index` is enabled, previously-indexed projects are also registered with the background watcher for ongoing git-based change detection, so the graph stays fresh without any manual re-indexing.
+
+## Use Cases
+
+<CardGroup cols={3}>
+  <Card title="CI/CD Integration" icon="circle-play">
+    Run `cli index_repository` in your pipeline after checkout to pre-build the graph artifact. Combine with `cli detect_changes` to annotate pull requests with affected symbols.
+  </Card>
+  <Card title="Shell Scripting" icon="terminal">
+    Use `--raw` and `jq` to extract structured data — dead functions, import lists, route inventories — and pipe them into other tools or reports.
+  </Card>
+  <Card title="Debugging" icon="bug">
+    Reproduce unexpected agent behaviour by replaying the exact tool call from your terminal. Compare JSON output before and after reindexing to confirm the graph is correct.
+  </Card>
+</CardGroup>
+
+## All 14 Tools via CLI
+
+Any tool that works over MCP works identically from the command line. Here is a quick reference:
+
+| Tool | Example JSON |
+|------|-------------|
+| `index_repository` | `{"repo_path": "/abs/path"}` |
+| `list_projects` | `{}` |
+| `delete_project` | `{"project": "my-repo"}` |
+| `index_status` | `{"project": "my-repo"}` |
+| `search_graph` | `{"name_pattern": ".*Auth.*", "label": "Class"}` |
+| `trace_path` | `{"function_name": "HandleRequest", "direction": "inbound"}` |
+| `detect_changes` | `{"project": "my-repo"}` |
+| `query_graph` | `{"query": "MATCH (f:Function) WHERE f.name =~ '.*Test.*' RETURN f.name"}` |
+| `get_graph_schema` | `{"project": "my-repo"}` |
+| `get_code_snippet` | `{"qualified_name": "my-repo.src.main.HandleRequest"}` |
+| `get_architecture` | `{"project": "my-repo"}` |
+| `search_code` | `{"pattern": "TODO", "project": "my-repo"}` |
+| `manage_adr` | `{"action": "list", "project": "my-repo"}` |
+| `ingest_traces` | `{"project": "my-repo", "traces": [...]}` |
+
+<Note>
+  All paths passed to CLI tools must be **absolute paths**. Relative paths are not resolved against the current working directory.
+</Note>

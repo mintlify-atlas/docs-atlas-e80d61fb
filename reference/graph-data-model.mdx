@@ -1,0 +1,196 @@
+---
+title: "Knowledge Graph Data Model: Nodes, Edges, and Properties"
+sidebarTitle: "Graph Data Model"
+description: "Complete reference for the Codebase Memory MCP graph schema — all node labels, edge types, property definitions, and qualified name format."
+---
+
+Codebase Memory MCP builds a **persistent SQLite knowledge graph** by parsing your codebase with tree-sitter and, for 11 languages, with Hybrid LSP semantic type resolution on top. The result is a property graph where every symbol, file, package, and infrastructure resource becomes a node and every relationship — call, import, inheritance, HTTP link — becomes a typed directed edge. Understanding the schema lets you write precise Cypher queries and interpret `search_graph` results correctly.
+
+<Tip>
+  Run `get_graph_schema` on any indexed project to see the exact node labels, edge types, property definitions, and counts present in that specific index. Schema varies by language and project structure.
+</Tip>
+
+---
+
+## Node Labels
+
+Each node has exactly one label from the set below. The `qualified_name` property uniquely identifies a node within a project store.
+
+| Label | Description | Key Properties |
+|-------|-------------|----------------|
+| `Project` | Root node representing an indexed repository | `name`, `path` |
+| `Package` | Package manager dependency (npm, Go module, Cargo crate, etc.) | `name`, `version`, `ecosystem` |
+| `Folder` | Directory node in the file tree | `path`, `name` |
+| `File` | Source file | `path`, `language`, `size` |
+| `Module` | Module or namespace grouping (also used for Kustomize overlays) | `name` |
+| `Class` | Class or struct definition | `name`, `file`, `line` |
+| `Function` | Top-level function or procedure | `name`, `file`, `line`, `params`, `returns` |
+| `Method` | Method defined on a class or struct | `name`, `file`, `line`, `class` |
+| `Interface` | Interface or abstract type declaration | `name`, `file` |
+| `Enum` | Enumeration definition | `name`, `file` |
+| `Type` | Type alias or typedef | `name`, `file` |
+| `Route` | HTTP, gRPC, GraphQL, or tRPC endpoint | `name`, `method`, `path`, `file` |
+| `Resource` | Kubernetes or infrastructure resource | `kind`, `apiVersion` |
+
+### Complexity properties on Function and Method
+
+Every `Function` and `Method` node carries queryable complexity metrics extracted during indexing:
+
+| Property | Description |
+|----------|-------------|
+| `cyclomatic` | Classic McCabe cyclomatic complexity |
+| `cognitive` | Cognitive complexity (nesting-weighted) |
+| `loop_count` | Total loop constructs |
+| `loop_depth` | Maximum nested-loop depth (polynomial-degree proxy) |
+| `transitive_loop_depth` | Worst-case nested-loop degree propagated along `CALLS` edges |
+| `linear_scan_in_loop` | Count of `find`/`contains`/`indexOf`-style scans inside a loop (hidden O(n²) signal) |
+| `alloc_in_loop` | Allocations or appends inside a loop |
+| `recursion_in_loop` | Self-call inside a loop |
+| `unguarded_recursion` | Recursion with no conditionally-guarded base case |
+| `param_count` | Number of parameters (structure smell) |
+| `max_access_depth` | Maximum member access chain depth (structure smell) |
+
+---
+
+## Edge Types
+
+Edges are directed and typed. The source and target labels listed are the most common pairings; the graph engine does not enforce strict source/target constraints.
+
+### Structural edges
+
+| Edge | From | To | Description |
+|------|------|----|-------------|
+| `CONTAINS_PACKAGE` | `Project` | `Package` | Project declares this dependency |
+| `CONTAINS_FOLDER` | `Project` / `Folder` | `Folder` | Directory containment |
+| `CONTAINS_FILE` | `Folder` | `File` | File belongs to directory |
+| `DEFINES` | `File` / `Module` | `Function` / `Class` / `Interface` / `Enum` / `Type` | File or module defines a symbol |
+| `DEFINES_METHOD` | `Class` | `Method` | Class contains this method |
+| `MEMBER_OF` | `Function` / `Variable` | `Class` / `Module` | Symbol belongs to a container |
+| `IMPORTS` | `File` / `Module` | `File` / `Module` / `Package` | Import or use declaration |
+
+### Semantic edges
+
+| Edge | From | To | Description |
+|------|------|----|-------------|
+| `CALLS` | `Function` / `Method` | `Function` / `Method` | Direct function/method call |
+| `ASYNC_CALLS` | `Function` / `Method` | `Function` / `Route` | Async or event-driven call |
+| `HTTP_CALLS` | `Function` / `Method` | `Route` | Static HTTP call-site linked to a Route node |
+| `IMPLEMENTS` | `Class` | `Interface` | Class implements an interface |
+| `INHERITS` | `Class` | `Class` | Inheritance relationship |
+| `USES_TYPE` | `Function` / `Method` / `Class` | `Type` / `Class` / `Interface` | Type reference |
+| `HANDLES` | `Function` / `Method` | `Route` | Function is the handler for an HTTP route |
+| `USAGE` | any | any | General usage reference |
+| `TESTS` | `Function` / `Method` | `Function` / `Class` | Test function targeting a symbol |
+
+### Infrastructure and config edges
+
+| Edge | From | To | Description |
+|------|------|----|-------------|
+| `CONFIGURES` | `File` | `Resource` / `Module` | Config file configures a resource |
+| `WRITES` | `Function` / `Method` | `File` / `Resource` | Code writes to a file or resource |
+
+### Data flow and analysis edges
+
+| Edge | From | To | Description |
+|------|------|----|-------------|
+| `DATA_FLOWS` | `Function` / `Method` | `Function` / `Method` | Data flow with arg-to-param mapping and field access chains |
+| `FILE_CHANGES_WITH` | `File` | `File` | Files that frequently change together (git co-change analysis) |
+| `SIMILAR_TO` | `Function` / `Method` | `Function` / `Method` | MinHash + LSH near-clone detection, Jaccard-scored |
+| `SEMANTICALLY_RELATED` | `Function` / `Method` | `Function` / `Method` | Vocabulary-mismatch semantic similarity, score ≥ 0.80 |
+
+### Event / channel edges
+
+| Edge | From | To | Description |
+|------|------|----|-------------|
+| `EMITS` | `Function` / `Method` | `Module` / `Variable` | Emits an event or publishes to a channel |
+| `LISTENS_ON` | `Function` / `Method` | `Module` / `Variable` | Subscribes to an event or channel |
+
+### Cross-repo edges
+
+Cross-repo edges link nodes across multiple repositories indexed under the same store. They are created by `index_repository` in `cross-repo-intelligence` mode.
+
+| Edge | Description |
+|------|-------------|
+| `CROSS_HTTP_CALLS` | HTTP call-site in one service linking to a `Route` in another |
+| `CROSS_ASYNC_CALLS` | Async/event call crossing service boundaries |
+| `CROSS_CHANNEL` | Channel `EMITS` ↔ `LISTENS_ON` pairing across services |
+| `CROSS_GRPC_CALLS` | gRPC call crossing service boundaries |
+| `CROSS_GRAPHQL_CALLS` | GraphQL operation crossing service boundaries |
+| `CROSS_TRPC_CALLS` | tRPC call crossing service boundaries |
+
+---
+
+## Qualified Names
+
+Every node has a `qualified_name` property that uniquely identifies it within a project store. The format is:
+
+```
+<project>.<path_parts>.<symbol_name>
+```
+
+For example, a function `ProcessOrder` in `src/handlers/order.go` in a project named `myapp` would have the qualified name:
+
+```
+myapp.src.handlers.ProcessOrder
+```
+
+Qualified names are used by `get_code_snippet` to retrieve source code, and appear in `search_graph` and `query_graph` results. Always discover the qualified name first via `search_graph`, then pass it to `get_code_snippet`.
+
+### Discovery workflow
+
+```bash
+# Step 1: find the qualified name with a regex search
+codebase-memory-mcp cli search_graph '{
+  "name_pattern": ".*ProcessOrder.*",
+  "project": "myapp"
+}'
+
+# Step 2: get the source code using the qualified name from the results
+codebase-memory-mcp cli get_code_snippet '{
+  "qualified_name": "myapp.src.handlers.ProcessOrder",
+  "project": "myapp"
+}'
+```
+
+Or using a Cypher query to find qualified names:
+
+```cypher
+MATCH (f:Function)
+WHERE f.name =~ '.*ProcessOrder.*'
+RETURN f.name, f.qualified_name, f.file
+```
+
+---
+
+## Querying the Schema at Runtime
+
+`get_graph_schema` returns the live schema for any indexed project:
+
+```bash
+codebase-memory-mcp cli get_graph_schema '{"project": "myapp"}'
+```
+
+The response includes:
+
+- **Node labels** — all labels present, with their property names and counts
+- **Edge types** — all relationship types present, with example source → target patterns
+- **Total counts** — aggregate node and edge counts for the project
+
+This is the authoritative source for what is indexed — use it before writing Cypher queries to avoid querying labels or edge types that don't exist in the current index.
+
+---
+
+## Infrastructure-as-Code Nodes
+
+Dockerfiles, Kubernetes manifests, and Kustomize overlays are indexed as first-class graph nodes:
+
+- **Dockerfile** — parsed as `File` nodes; `FROM` stages and `RUN` commands create structured nodes
+- **Kubernetes manifests** — `Resource` nodes with `kind` and `apiVersion` properties; `CONFIGURES` edges link them to application code
+- **Kustomize overlays** — `Module` nodes with `IMPORTS` edges to referenced base resources
+
+This means you can write Cypher queries like:
+
+```cypher
+MATCH (f:Function)-[:CONFIGURES]->(r:Resource {kind: 'Deployment'})
+RETURN f.name, r.name
+```

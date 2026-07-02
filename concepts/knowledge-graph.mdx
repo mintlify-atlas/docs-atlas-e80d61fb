@@ -1,0 +1,240 @@
+---
+title: "The Codebase Knowledge Graph: Nodes, Edges, and Structure"
+sidebarTitle: "Knowledge Graph"
+description: "Learn how Codebase Memory MCP models your codebase as a graph of nodes and typed edges, enabling structural queries impossible with text search."
+---
+
+Codebase Memory MCP doesn't read your code like a file browser — it builds a **persistent knowledge graph** where every function, class, route, and package is a node and every relationship between them is a typed edge. When your agent asks "who calls `ProcessOrder`?" or "which services call this HTTP route?", it gets a sub-millisecond graph traversal rather than a full-text grep. This graph is stored in a SQLite database, survives restarts, and can be queried with a Cypher-like syntax or surfaced through the 14 dedicated MCP tools.
+
+---
+
+## Node Labels
+
+Every entity in your codebase maps to a node with one of thirteen labels. The label determines what properties the node carries and which edge types can connect to it.
+
+| Label | Represents |
+|-------|------------|
+| **Project** | The root node for an indexed repository. All other nodes for that repo descend from it. |
+| **Package** | A language-level package or module group — `github.com/foo/bar`, `@myorg/pkg`, a Python package directory. |
+| **Folder** | A filesystem directory within the project. Used to reconstruct the tree structure. |
+| **File** | A single source file. Carries language, path, and temporal metadata (change count, last modified). |
+| **Module** | A logical compilation or import unit — a Python module, a Go package file, a Kustomize overlay. |
+| **Class** | A class, struct, or record definition. |
+| **Function** | A standalone function or free function. |
+| **Method** | A method belonging to a class or interface. |
+| **Interface** | An interface, abstract class, protocol, or trait definition. |
+| **Enum** | An enumeration type. |
+| **Type** | A type alias, `typedef`, generic type parameter, or named type. |
+| **Route** | A REST, gRPC, GraphQL, or tRPC endpoint. Routes are first-class entities — they connect HTTP call sites to handler functions across services. |
+| **Resource** | A Kubernetes resource kind (Deployment, Service, ConfigMap, etc.) or other infrastructure resource indexed from manifests. |
+
+<Note>
+The `Route` node is automatically created when the pipeline detects HTTP call sites or framework route declarations (Express, FastAPI, Gin, etc.). You can query all routes in a project with `MATCH (r:Route) RETURN r.name, r.method, r.url_path`.
+</Note>
+
+---
+
+## Edge Types
+
+Edges encode the relationships between nodes. Every edge has a type, a direction (from → to), and an optional properties bag (confidence score, argument expressions, URL path, etc.).
+
+### Structural edges
+
+These edges form the containment hierarchy of your project.
+
+| Edge | From → To | Meaning |
+|------|-----------|---------|
+| `CONTAINS_PACKAGE` | Project → Package | The project contains this package. |
+| `CONTAINS_FOLDER` | Project / Folder → Folder | Folder nesting. |
+| `CONTAINS_FILE` | Project / Folder → File | A file lives in a folder. |
+| `DEFINES` | File / Module → Class / Function / Interface / Enum / Type | The file declares this symbol. |
+| `DEFINES_METHOD` | Class / Interface → Method | The class owns this method. |
+| `MEMBER_OF` | Type / Enum → Class | A field, enum variant, or nested type belongs to a class. |
+
+### Semantic edges
+
+These edges capture language-level relationships between symbols.
+
+| Edge | From → To | Meaning |
+|------|-----------|---------|
+| `CALLS` | Function / Method → Function / Method | A direct function or method call. Confidence-scored; Hybrid LSP refines these. |
+| `IMPORTS` | File / Module → File / Module / Package | An import or `use` declaration. |
+| `IMPLEMENTS` | Class → Interface | A class implements an interface or satisfies a Go interface implicitly. |
+| `INHERITS` | Class → Class | Class inheritance (`extends`, `: Base`, etc.). |
+| `USES_TYPE` | Function / Method → Class / Type / Interface | A symbol references a type (parameter, return type, field). |
+| `USAGE` | Function / Method → Function / Method / Class | A usage reference that is not a direct call (e.g. passing a function as a value). |
+
+### Call and data-flow edges
+
+| Edge | From → To | Meaning |
+|------|-----------|---------|
+| `HTTP_CALLS` | Function / Method → Route | An HTTP client call targeting a Route node. Confidence-scored with method + path matching. |
+| `ASYNC_CALLS` | Function / Method → Route | An async or message-queue dispatch (Kafka topic publish, SQS send, etc.). |
+| `EMITS` | Function / Method → Route | Emits a Socket.IO, EventEmitter, or pub-sub event. |
+| `LISTENS_ON` | Function / Method → Route | Subscribes to a channel, topic, or event. |
+| `DATA_FLOWS` | Function → Function | Data flows from one function into another, with argument-to-parameter mapping and field access chains. |
+| `HANDLES` | Route → Function / Method | A Route node is handled by this function. |
+
+### Infrastructure and config edges
+
+| Edge | From → To | Meaning |
+|------|-----------|---------|
+| `CONFIGURES` | File → Function / Class / Module | A configuration file (`.env`, `pyproject.toml`, `application.yaml`) influences a symbol. |
+| `WRITES` | Function / Method → File / Resource | A function writes to a file or infrastructure resource. |
+| `TESTS` | Function / Method → Function / Method / Class | A test function exercises the target symbol. |
+
+### Similarity and semantic-relatedness edges
+
+| Edge | Meaning |
+|------|---------|
+| `SIMILAR_TO` | MinHash + LSH near-clone detection across files, Jaccard-scored. Added in `FULL` and `MODERATE` index modes. |
+| `SEMANTICALLY_RELATED` | Vocabulary-mismatch detection via algorithmic embeddings — same language, score ≥ 0.80. Pairs functions that do related things under different names. |
+
+### File co-change edge
+
+| Edge | Meaning |
+|------|---------|
+| `FILE_CHANGES_WITH` | Two files that frequently change together in git commits. Score reflects coupling strength and recency. Useful for blast-radius and risk analysis. |
+
+### Cross-repo edges
+
+When multiple repositories are indexed into the same store, the cross-repo pass creates `CROSS_*` variants that link nodes across project boundaries:
+
+| Edge | Meaning |
+|------|---------|
+| `CROSS_HTTP_CALLS` | An HTTP call site in one service calls a route in another indexed service. |
+| `CROSS_ASYNC_CALLS` | Async/message dispatch from one project into a handler in another. |
+| `CROSS_CHANNEL` | A pub-sub channel (`EMITS` / `LISTENS_ON`) that crosses service boundaries. |
+| `CROSS_GRPC_CALLS` | A gRPC stub call resolved to a protobuf route in another project. |
+| `CROSS_GRAPHQL_CALLS` | A GraphQL operation resolved to a resolver in another project. |
+| `CROSS_TRPC_CALLS` | A tRPC procedure call resolved across project boundaries. |
+
+<Tip>
+`CROSS_*` edges are bidirectional — both the calling service and the receiving service get the edge. Use `trace_path` with `mode: "cross_service"` to traverse them automatically.
+</Tip>
+
+---
+
+## Qualified Names
+
+Every node in the graph has a **qualified name** (QN) that uniquely identifies it. Qualified names follow the pattern:
+
+```
+<project>.<path_parts>.<symbol_name>
+```
+
+For a function `process_order` in `src/orders/handler.py` of a project named `my-api`:
+
+```
+my-api.src.orders.handler.process_order
+```
+
+Path separators (`/`) become dots. File extensions are stripped. Python `__init__` and JavaScript `index` stems are dropped so that `src/orders/__init__.py` maps to `my-api.src.orders` — consistent with how imports work in each language.
+
+### Discovering qualified names
+
+The easiest way to find exact QNs is with `search_graph`:
+
+```bash
+codebase-memory-mcp cli search_graph '{"name_pattern": ".*process_order.*"}'
+```
+
+Or in an agent:
+
+```
+search_graph(name_pattern=".*ProcessOrder.*", label="Function")
+```
+
+The returned `qualified_name` field is what `get_code_snippet` and `trace_path` expect. Never guess a QN — always discover it first.
+
+---
+
+## Example Queries
+
+The `query_graph` tool accepts a read-only openCypher subset. Here are patterns that demonstrate the kinds of structural questions the graph can answer.
+
+### Call chain traversal
+
+Find everything that `ProcessOrder` calls, up to 3 hops deep:
+
+```cypher
+MATCH (f:Function)-[:CALLS*1..3]->(g)
+WHERE f.name = 'ProcessOrder'
+RETURN g.name, g.qualified_name, labels(g)
+```
+
+Or use the dedicated tool, which handles import-aware traversal automatically:
+
+```bash
+codebase-memory-mcp cli trace_path '{"function_name": "ProcessOrder", "direction": "outbound", "depth": 3}'
+```
+
+### Dead code detection
+
+Find functions with no callers that are also not entry points:
+
+```cypher
+MATCH (f:Function)
+WHERE NOT EXISTS { ()<-[:CALLS]-(f) }
+  AND NOT f.name IN ['main', 'handler', 'run']
+RETURN f.name, f.file_path
+ORDER BY f.name
+LIMIT 50
+```
+
+### Cross-service HTTP link discovery
+
+Find all outbound HTTP calls and the routes they target in other services:
+
+```cypher
+MATCH (caller)-[:HTTP_CALLS|CROSS_HTTP_CALLS]->(route:Route)
+RETURN caller.name, caller.project, route.url_path, route.method, route.project
+ORDER BY route.url_path
+```
+
+### Inheritance hierarchy traversal
+
+Find all classes that directly or transitively inherit from `BaseHandler`:
+
+```cypher
+MATCH (child:Class)-[:INHERITS*1..5]->(parent:Class)
+WHERE parent.name = 'BaseHandler'
+RETURN child.name, child.qualified_name
+ORDER BY child.name
+```
+
+### Interface implementors
+
+Find every class that implements `IUserRepository`:
+
+```cypher
+MATCH (c:Class)-[:IMPLEMENTS]->(i:Interface)
+WHERE i.name = 'IUserRepository'
+RETURN c.name, c.file_path
+```
+
+---
+
+## Persistence
+
+The knowledge graph is stored in SQLite databases at `~/.cache/codebase-memory-mcp/`. The store uses **WAL (Write-Ahead Logging) mode** and is ACID-safe — an interrupted index never corrupts an existing graph. A plausibility gate (`CBM_DUMP_VERIFY_MIN_RATIO`) checks that the persisted node count is within a configured fraction of the in-memory count before reporting success; if the ratio falls below the threshold, `index_repository` returns `status: "degraded"` rather than silently accepting a partial write.
+
+To override the storage location:
+
+```bash
+export CBM_CACHE_DIR=~/my-projects/cbm-data
+```
+
+To reset all indexes:
+
+```bash
+rm -rf ~/.cache/codebase-memory-mcp/
+```
+
+---
+
+## Team Sharing
+
+You can commit a compressed snapshot of the knowledge graph so teammates skip the initial reindex. When you index a project, Codebase Memory MCP can write `.codebase-memory/graph.db.zst` — a zstd-compressed SQLite dump — alongside your source. When a teammate clones the repo and runs the tool for the first time, the artifact is decompressed and incremental indexing fills in only the diff.
+
+See the [Team Shared Graph guide](/guides/team-shared-graph) for export options, the two-tier compression strategy (best vs. fast), merge conflict avoidance via `.gitattributes`, and how to opt out entirely.

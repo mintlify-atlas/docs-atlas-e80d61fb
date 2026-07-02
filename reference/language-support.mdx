@@ -1,0 +1,140 @@
+---
+title: "Language Support: 158 Languages with Tree-Sitter and Hybrid LSP"
+sidebarTitle: "Language Support"
+description: "Codebase Memory MCP supports 158 languages via vendored tree-sitter grammars. 11 languages have full Hybrid LSP semantic type resolution."
+---
+
+Codebase Memory MCP parses all 158 supported languages using **vendored tree-sitter grammars compiled directly into the static binary** — there is nothing to install, no runtime to configure, and nothing that breaks when a grammar library updates. For 11 languages, a second **Hybrid LSP** pass runs on top of the tree-sitter AST to add semantic type resolution: resolving `user.profile.display_name()` to `Profile.display_name` declared three modules away, tracking generics, inferring return types, and resolving cross-file imports — producing call edges accurate enough to drive `trace_path` across package boundaries and inheritance hierarchies.
+
+---
+
+## Hybrid LSP Languages
+
+Hybrid LSP is a lightweight C implementation of language type-resolution algorithms structurally inspired by major language servers (tsserver/typescript-go, pyright, gopls, Roslyn, Eclipse JDT, rust-analyzer). It runs in-process alongside tree-sitter on every parse — no language server process, no per-project setup, no API key.
+
+| Language | What the Hybrid LSP Pass Handles |
+|----------|----------------------------------|
+| **Python** *(v0.7.0+)* | Imports + dotted submodule walks, dataclasses, `Self` return types, generics, `@property`, `match/case` class patterns, SQLAlchemy 2.0 `Mapped[T]`, Pydantic `BaseModel`, `typing.Annotated` / `ClassVar` / `Final` / `InitVar`, async/await, classmethod/staticmethod, narrowing (`isinstance` / `is not None` / walrus), `typing.cast` / `assert_type`, common stdlib (logging, pathlib, json, functools) |
+| **TypeScript / JavaScript / JSX / TSX** | Generics, JSX component dispatch, JSDoc inference for plain JS, `.d.ts` declarations, module re-exports, method chaining via return-type propagation, per-file overlay chained to a shared cross-file registry |
+| **PHP** *(v0.7.0+)* | Namespaces, traits, late-static-binding, PHPDoc inference, parameter binding, return-type inference |
+| **C#** *(v0.7.0+)* | Global usings, file-scoped namespaces, records (including C# 12 primary constructors), LINQ method syntax, `async Task<T>` / `ValueTask<T>` unwrap, generic methods, `this` / `base` dispatch, `var` inference, common BCL stdlib |
+| **Go** *(sharpened v0.7.0+)* | Pre-built per-package cross-file registry, generics, embedded structs, interface satisfaction, package-aware import resolution |
+| **C / C++** *(sharpened v0.7.0+)* | Pre-built per-language cross-file registry shared across C and C++; C handles macros + `typedef` chains + header-vs-source linking; C++ handles templates, namespaces, `auto` inference, and method resolution via class hierarchy |
+| **Java** *(v0.8.0+)* | Imports (single-type, on-demand, static), class hierarchies with `this` / `super` dispatch, generics, annotations, overload matching by arity and parameter types, lambdas / method references bound to functional interfaces, field-type inference, common JDK stdlib |
+| **Kotlin** *(v0.8.0+)* | Imports + same-package resolution, classes / objects / companion objects, extension functions, data classes, nullable-type unwrapping, scope functions (`let` / `apply` / `run` / `also` / `with`), infix calls, common stdlib |
+| **Rust** *(v0.8.0+)* | `use` declarations + module paths, `impl` blocks and trait methods, struct fields, generics with trait bounds, operator-trait desugaring, derive-macro method synthesis, UFCS static paths, common std prelude |
+
+### Two-layer architecture
+
+1. **Tree-sitter pass** — fast syntactic analysis, runs for all 158 languages. Extracts definitions, call sites, and imports.
+2. **Hybrid LSP pass** — type-aware, runs above the tree-sitter pass for the 11 languages listed above. Refines call edges using the import graph and a per-file or pre-built cross-file definition registry.
+
+Languages without a Hybrid LSP pass fall back to textual resolution — you always get *some* answer.
+
+---
+
+## Benchmark Tiers
+
+Benchmarked against 64 real open-source repositories (78 to 49K nodes) across 12 standard questions per language. Overall score: **91.8%** across all tested languages.
+
+### Tier 1 — Excellent (≥ 90%)
+
+17 languages with perfect or near-perfect scores across all benchmark questions:
+
+| Language | Score | Benchmark Repository |
+|----------|-------|---------------------|
+| Lua | 100% | neovim/neovim (23,955 nodes) |
+| Kotlin | 100% | ktorio/ktor (25,297 nodes) |
+| C++ | 100% | nlohmann/json (5,262 nodes) |
+| Perl | 100% | mojolicious/mojo (3,287 nodes) |
+| Objective-C | 100% | AFNetworking/AFNetworking (1,087 nodes) |
+| Groovy | 100% | spockframework/spock (14,081 nodes) |
+| C | 100% | jqlang/jq (1,330 nodes) |
+| Bash | 100% | bats-core/bats-core (436 nodes) |
+| Zig | 100% | zigtools/zls (2,824 nodes) |
+| CSS | 100% | animate-css/animate.css |
+| YAML | 100% | kubernetes/examples |
+| TOML | 100% | rust-lang/cargo |
+| HTML | 100% | twbs/bootstrap |
+| SCSS | 100% | twbs/bootstrap |
+| HCL | 100% | hashicorp/terraform |
+| Dockerfile | 100% | docker-library/official-images |
+| Swift | 95% | Alamofire/Alamofire (3,631 nodes) |
+
+### Tier 2 — Good (75–89%)
+
+16 languages with solid results across all core operations:
+
+| Language | Score | Benchmark Repository |
+|----------|-------|---------------------|
+| Python | 87% | django/django (49,398 nodes) |
+| TypeScript | 87% | nestjs/nest (9,063 nodes) |
+| TSX | 87% | shadcn-ui/ui (29,755 nodes) |
+| Go | 87% | codebase-memory-mcp (self) |
+| Rust | 87% | BurntSushi/ripgrep (4,118 nodes) |
+| Java | 87% | spring-projects/spring-petclinic (660 nodes) |
+| R | 87% | tidyverse/dplyr (1,618 nodes) |
+| Dart | 87% | felangel/bloc (5,089 nodes) |
+| JavaScript | 86% | lodash/lodash (244 nodes) |
+| Erlang | 86% | ninenines/cowboy (3,270 nodes) |
+| Elixir | 86% | elixir-plug/plug (870 nodes) |
+| Scala | 75% | playframework/playframework (19,627 nodes) |
+| Ruby | 75% | sinatra/sinatra (1,377 nodes) |
+| PHP | 75% | laravel/framework (38,644 nodes) |
+| C# | 75% | jasontaylordev/CleanArchitecture (1,043 nodes) |
+| SQL | 75% | flyway/flyway |
+
+### Tier 3 — Functional (< 75%)
+
+2 languages with functional but limited semantic analysis:
+
+| Language | Score | Notes |
+|----------|-------|-------|
+| OCaml | 72% | Module functor indirection limits call resolution |
+| Haskell | 62% | Function composition (`f . g`) not modeled as CALLS edges |
+
+---
+
+## All 158 Supported Languages
+
+In addition to the benchmarked languages above, the following are fully supported via vendored tree-sitter grammars (not yet benchmarked):
+
+Ada, Agda, Apex, Assembly (NASM), Astro, AWK, Beancount, BibTeX, Bicep, Bitbake, Blade, Cairo, Cap'n Proto, Clojure, CMake, COBOL, Common Lisp, Crystal, CSV, CUDA, D, Devicetree, Diff, .env, Elm, Emacs Lisp, F#, Fennel, Fish, FORM, Fortran, FunC, GDScript, .gitattributes, .gitignore, Gleam, GLSL, GN, Go module, Go template, GraphQL, Hare, HLSL, Hyprlang, INI, ISPC, Janet, Jinja2, JSDoc, JSON, JSON5, Jsonnet, Julia, Just, Kconfig, KDL, Lean 4, Linker Script, Liquid, LLVM IR, Luau, Magma, Makefile, Markdown, MATLAB, Mermaid, Meson, Move, Nickel, Nim, Nix, Odin, Pascal, Pkl, PO (gettext), Pony, PowerShell, Prisma, .properties, Protobuf, Puppet, PureScript, Racket, Regex, requirements.txt, ReScript, RON, reStructuredText, Scheme, Slang, Smali, Smithy, Solidity, SOQL, SOSL, Squirrel, SSH config, Starlark, Svelte, Sway, SystemVerilog, TableGen, Tcl, Teal, Templ, Thrift, TLA+, Typst, Verilog, VHDL, Vim script, Vue, WGSL, WIT, Wolfram, XML, Zsh.
+
+---
+
+## Custom File Extensions
+
+Map additional file extensions to supported languages using a JSON configuration file. This is useful for framework-specific extensions that don't match standard patterns.
+
+**Per-project** (place in your repository root):
+
+```json
+// .codebase-memory.json
+{
+  "extra_extensions": {
+    ".blade.php": "php",
+    ".mjs": "javascript"
+  }
+}
+```
+
+**Global** (applies to all projects):
+
+```json
+// ~/.config/codebase-memory-mcp/config.json
+{
+  "extra_extensions": {
+    ".twig": "html",
+    ".phtml": "php"
+  }
+}
+```
+
+Per-project configuration overrides global for conflicting extensions. Unknown language values are silently skipped. Missing config files are ignored.
+
+---
+
+## Nothing to Install
+
+All 158 tree-sitter grammars are compiled into the binary at build time. The binary is fully self-contained — no grammar libraries to install, no version mismatches, no runtime dependencies. Download the binary, run `install`, restart your agent.

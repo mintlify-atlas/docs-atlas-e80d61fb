@@ -1,0 +1,107 @@
+---
+title: "Codebase Memory MCP: Code Intelligence Engine for AI Agents"
+sidebarTitle: "Introduction"
+description: "Codebase Memory MCP indexes any codebase into a persistent knowledge graph. 158 languages, sub-ms queries, 99% fewer tokens, single static binary."
+---
+
+Codebase Memory MCP is a high-performance code intelligence engine that transforms any codebase into a persistent, queryable knowledge graph — giving AI coding agents structured answers about your code instead of forcing them to read every file from scratch. Built as a single static binary in pure C with zero runtime dependencies, it ships with 158 vendored tree-sitter grammars, Hybrid LSP semantic type resolution for 11 languages, and 14 MCP tools covering everything from call-chain tracing to dead code detection. Install it once, and every agent you use — Claude Code, Codex CLI, Gemini CLI, Zed, and eight others — gets a persistent, sub-millisecond index of your entire codebase.
+
+## Why Codebase Memory MCP
+
+When an AI agent needs to answer "what calls `ProcessOrder`?", the naive approach is to grep through files one by one, reading thousands of lines of source code and burning through your context window. Codebase Memory MCP replaces that file-by-file trawl with a single structured graph query that returns the exact answer in under a millisecond.
+
+The difference in token consumption is stark:
+
+| Exploration method | Token usage (5 structural queries) |
+|--------------------|-------------------------------------|
+| File-by-file grep/read | ~412,000 tokens |
+| Codebase Memory MCP graph queries | ~3,400 tokens |
+| **Reduction** | **99.2% fewer tokens** |
+
+In the [arXiv research evaluation](#research-background) across 31 real-world repositories, Codebase Memory MCP achieved 83% answer quality, 10× fewer tokens, and 2.1× fewer tool calls compared to file-by-file exploration. One graph query replaces dozens of grep/read cycles.
+
+## Key Capabilities
+
+<CardGroup cols={2}>
+  <Card title="158 Languages" icon="code">
+    All 158 tree-sitter grammars are vendored and compiled directly into the binary. Nothing to install, nothing that breaks. Excellent tier coverage for C, C++, Python, TypeScript, Go, Rust, Kotlin, Lua, and more.
+  </Card>
+  <Card title="Hybrid LSP" icon="magnifying-glass">
+    A lightweight C implementation of type-resolution algorithms — structurally compatible with tsserver, pyright, gopls, Roslyn, Eclipse JDT, and rust-analyzer — runs alongside tree-sitter to produce accurate cross-package `CALLS` edges with no language server process.
+  </Card>
+  <Card title="14 MCP Tools" icon="wrench">
+    `search_graph`, `trace_path`, `get_architecture`, `detect_changes`, `query_graph`, `semantic_query`, `get_code_snippet`, `manage_adr`, and more — covering search, traversal, impact analysis, and Cypher-like queries.
+  </Card>
+  <Card title="Zero Dependencies" icon="cube">
+    Single static binary for macOS (arm64/amd64), Linux (arm64/amd64), and Windows (amd64). No Docker, no runtime, no API keys. Download → `install` → restart agent → done.
+  </Card>
+  <Card title="99% Fewer Tokens" icon="bolt">
+    RAM-first pipeline with LZ4 compression indexes the Linux kernel (28M LOC, 75K files) in 3 minutes. Cypher queries return in under 1 ms. Five structural queries cost ~3,400 tokens vs ~412,000 via grep.
+  </Card>
+  <Card title="11 Agent Support" icon="robot">
+    `install` auto-detects Claude Code, Codex CLI, Gemini CLI, Zed, OpenCode, Antigravity, Aider, KiloCode, VS Code, OpenClaw, and Kiro — configuring MCP entries, instruction files, and pre-tool hooks for each automatically.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+Codebase Memory MCP is a **structural analysis backend** — it builds and queries the knowledge graph. It does not include an LLM. Instead, it relies on your MCP client (Claude Code, or any MCP-compatible agent) to act as the intelligence layer that translates your natural language into tool calls.
+
+```
+You: "what calls ProcessOrder?"
+
+Agent calls: trace_path(function_name="ProcessOrder", direction="inbound")
+
+codebase-memory-mcp: executes graph query, returns structured results
+
+Agent: presents the call chain in plain English
+```
+
+There is no extra API key to configure, no separate model to run, and no additional cost. The agent you are already talking to *is* the query translator.
+
+### Example: Tracing a call path
+
+```json
+{
+  "tool": "trace_path",
+  "arguments": {
+    "function_name": "ProcessOrder",
+    "direction": "inbound",
+    "depth": 3
+  }
+}
+```
+
+The server executes a BFS traversal of the knowledge graph and returns every function in the call chain — across files, packages, and inheritance hierarchies — as structured data the agent can describe in plain English. The same graph stores HTTP routes, infrastructure-as-code nodes (Dockerfiles, Kubernetes manifests, Kustomize overlays), ADRs, and cross-service links.
+
+### The indexing pipeline
+
+Indexing runs in two passes per file:
+
+1. **Tree-sitter pass** — fast, syntactic, covers all 158 languages. Extracts definitions, calls, and imports into an in-memory SQLite graph using LZ4 compression.
+2. **Hybrid LSP pass** — type-aware, for Python, TypeScript/JavaScript/JSX/TSX, PHP, C#, Go, C/C++, Java, Kotlin, and Rust. Refines call edges using the import graph and a per-file or cross-file definition registry, mirroring what an IDE "Go to Definition" would resolve.
+
+After indexing, the graph is persisted to `~/.cache/codebase-memory-mcp/` in WAL-mode SQLite. A background watcher detects file changes via git polling and re-indexes automatically, so the graph stays fresh without any manual intervention.
+
+## Research Background
+
+The design, architecture, and benchmark results behind Codebase Memory MCP are described in a peer-reviewed preprint:
+
+> **[Codebase-Memory: Tree-Sitter-Based Knowledge Graphs for LLM Code Exploration via MCP](https://arxiv.org/abs/2603.27277)**
+> arXiv:2603.27277 — Evaluated across 31 real-world repositories: 83% answer quality, 10× fewer tokens, 2.1× fewer tool calls vs. file-by-file exploration.
+
+## Security & Privacy
+
+Codebase Memory MCP processes your code entirely on your machine. Your source code, queries, environment, and usage **never leave your machine** — there is no telemetry, no analytics endpoint, and no remote service.
+
+Every release binary passes a multi-layer verification pipeline before publication:
+
+- **100% local** — all graph construction and querying happens on-device.
+- **SLSA Level 3** — cryptographic build provenance generated by GitHub Actions; verify with `gh attestation verify <file> --repo DeusData/codebase-memory-mcp`.
+- **VirusTotal** — all binaries scanned by 70+ antivirus engines (zero detections required to publish) on every release.
+- **Sigstore cosign** — keyless signatures on all artifacts, with bundles included in every release.
+- **SHA-256 checksums** — `checksums.txt` published with every release and verified by both install scripts before extraction.
+- **CodeQL SAST** — blocks the release pipeline if any open alerts remain.
+- **Zero runtime dependencies** — no transitive supply chain; all libraries are vendored at compile time.
+
+The full source is available for audit at [github.com/DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp).

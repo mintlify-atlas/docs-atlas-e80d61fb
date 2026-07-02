@@ -1,0 +1,146 @@
+---
+title: "Configure Codebase Memory MCP Across 11 AI Coding Agents"
+sidebarTitle: "Agent Setup"
+description: "The install command auto-detects and configures Claude Code, Codex CLI, Gemini CLI, Zed, OpenCode, Aider, KiloCode, VS Code, OpenClaw, Kiro, and Antigravity."
+---
+
+The `install` command is your single entry point for every agent. Once the binary is on your `PATH`, one command auto-detects every installed coding agent and writes the correct MCP server entry, instruction files, and pre-tool hooks for each — no manual JSON editing required.
+
+## Run the Install Command
+
+After placing the binary in your `PATH`, run:
+
+```bash
+codebase-memory-mcp install
+```
+
+Restart your coding agent. Verify with `/mcp` — you should see **codebase-memory-mcp** listed with **14 tools**.
+
+<Tip>
+  Use `--skip-config` to copy the binary to its install location without touching any agent configuration files. This is useful if you want to configure agents manually.
+</Tip>
+
+## Supported Agents
+
+| Agent | MCP Config | Instructions | Hooks |
+|-------|-----------|-------------|-------|
+| Claude Code | `.claude/.mcp.json` | 4 Skills | PreToolUse (Grep/Glob graph augment, non-blocking) |
+| Codex CLI | `.codex/config.toml` | `.codex/AGENTS.md` | SessionStart reminder |
+| Gemini CLI | `.gemini/settings.json` | `.gemini/GEMINI.md` | BeforeTool (grep reminder) + SessionStart reminder |
+| Zed | `settings.json` (JSONC) | — | — |
+| OpenCode | `opencode.json` | `AGENTS.md` | — |
+| Antigravity | `.gemini/config/mcp_config.json` (shared) | `antigravity-cli/AGENTS.md` | SessionStart reminder |
+| Aider | — | `CONVENTIONS.md` | — |
+| KiloCode | `mcp_settings.json` | `~/.kilocode/rules/` | — |
+| VS Code | `Code/User/mcp.json` | — | — |
+| OpenClaw | `openclaw.json` | — | — |
+| Kiro | `.kiro/settings/mcp.json` | — | — |
+
+## Hooks Behavior
+
+Hooks are how the `install` command makes your agent smarter about reaching for the knowledge graph automatically.
+
+**All hooks are structurally non-blocking** — every failure path exits with code 0 so a misconfigured hook can never halt your agent's normal operations.
+
+### Claude Code — PreToolUse Hook
+
+The Claude Code hook intercepts `Grep` and `Glob` tool calls (and **never** `Read` — gating `Read` would break the read-before-edit invariant that safe editing requires). When the search token matches indexed symbols, the hook injects `search_graph` results as `additionalContext` inside the tool response, so the agent gets structured call-graph context alongside its normal search results without any extra round trip.
+
+The installed shim file is named `cbm-code-discovery-gate` for backward compatibility with existing installs. Despite the legacy name it never gates and never blocks.
+
+### Codex CLI, Gemini CLI, and Antigravity — SessionStart Hook
+
+These agents receive a `SessionStart` hook that injects a one-line code-discovery reminder as session context at the start of each session. Gemini CLI additionally keeps a `BeforeTool` reminder that fires before grep-style calls. None of these hooks block execution.
+
+## Manual MCP Configuration
+
+If you prefer not to use the `install` command, or need to configure an agent on a machine where auto-detection does not work, use the sections below.
+
+<Tabs>
+  <Tab title="Claude Code">
+    Add to `~/.claude/.mcp.json` for a global config, or to a project-level `.mcp.json` file at your repo root:
+
+    ```json
+    {
+      "mcpServers": {
+        "codebase-memory-mcp": {
+          "command": "/path/to/codebase-memory-mcp",
+          "args": []
+        }
+      }
+    }
+    ```
+
+    Replace `/path/to/codebase-memory-mcp` with the absolute path to your binary (e.g. `~/.local/bin/codebase-memory-mcp`). Restart Claude Code after saving.
+  </Tab>
+  <Tab title="VS Code">
+    Add to `Code/User/mcp.json` (the VS Code user settings directory):
+
+    ```json
+    {
+      "servers": {
+        "codebase-memory-mcp": {
+          "type": "stdio",
+          "command": "/path/to/codebase-memory-mcp"
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Zed">
+    Add to your Zed `settings.json`:
+
+    ```json
+    {
+      "context_servers": {
+        "codebase-memory-mcp": {
+          "command": "/path/to/codebase-memory-mcp",
+          "args": [""]
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Generic (other agents)">
+    Most MCP-compatible agents accept the standard `mcpServers` JSON format:
+
+    ```json
+    {
+      "mcpServers": {
+        "codebase-memory-mcp": {
+          "command": "/path/to/codebase-memory-mcp",
+          "args": []
+        }
+      }
+    }
+    ```
+
+    Consult your agent's documentation for the exact config file location.
+  </Tab>
+</Tabs>
+
+## Verify the Setup
+
+<Steps>
+  <Step title="Restart your agent">
+    Fully quit and reopen your coding agent after running `install` or editing the config file manually. Many agents only read MCP config at startup.
+  </Step>
+  <Step title="Open the MCP panel">
+    Run the `/mcp` command (or open your agent's MCP tool list). You should see **codebase-memory-mcp** listed as a connected server with **14 tools**.
+  </Step>
+  <Step title="Index a project">
+    Tell your agent: **"Index this project"** — the agent will call `index_repository` and the knowledge graph will be ready in seconds.
+  </Step>
+</Steps>
+
+## Uninstall
+
+To remove all agent configurations, skills, hooks, and instruction files:
+
+```bash
+codebase-memory-mcp uninstall
+```
+
+<Note>
+  `uninstall` removes all agent configs and hooks but does **not** remove the binary itself or your SQLite databases. To fully clean up, also delete `~/.cache/codebase-memory-mcp/`.
+</Note>

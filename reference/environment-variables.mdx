@@ -1,0 +1,128 @@
+---
+title: "Environment Variables Reference for Codebase Memory MCP"
+sidebarTitle: "Environment Variables"
+description: "Configure Codebase Memory MCP behavior via environment variables: cache directory, diagnostics, log level, worker count, and update URL."
+---
+
+Codebase Memory MCP is configured entirely through environment variables — there is no configuration file for runtime behavior. Variables are read at startup and control where indexes are stored, how much parallelism the indexer uses, what gets written to logs, and whether the diagnostics trajectory is captured. All variables are optional; safe defaults are chosen for typical developer workstations.
+
+---
+
+## Variables
+
+<ParamField path="CBM_CACHE_DIR" type="string">
+  **Default:** `~/.cache/codebase-memory-mcp`
+
+  Override the database storage directory. All project index databases and the server configuration file are stored here. Useful for storing indexes on a separate volume, sharing indexes across users, or isolating test environments.
+</ParamField>
+
+<ParamField path="CBM_DIAGNOSTICS" type="boolean">
+  **Default:** `false`
+
+  Set to `1` or `true` to enable periodic diagnostics output. When enabled, the server writes two files to the system temp directory (`$TMPDIR` or `/tmp` on macOS/Linux, `%TEMP%` on Windows). See the [Diagnostics](#diagnostics) section below for details on the output format.
+</ParamField>
+
+<ParamField path="CBM_DOWNLOAD_URL" type="string">
+  **Default:** GitHub releases URL
+
+  Override the download URL used by `codebase-memory-mcp update`. Useful for self-hosted binary mirrors, air-gapped environments, or testing a release candidate before it is published.
+</ParamField>
+
+<ParamField path="CBM_LOG_LEVEL" type="string">
+  **Default:** `info`
+
+  Set the minimum log level. Accepted values (case-insensitive): `debug`, `info`, `warn`, `error`, `none` — or their numeric equivalents `0` through `4` matching the internal enum. All logs go to **stderr**; stdout is reserved for MCP JSON-RPC traffic and must not be polluted.
+</ParamField>
+
+<ParamField path="CBM_WORKERS" type="integer">
+  **Default:** Auto-detected from CPU count
+
+  Override the parallel-indexing worker count. Range: 1–256. Invalid values are ignored with a warning and the auto-detected count is used instead. Particularly useful inside containers where `sysconf(_SC_NPROCESSORS_ONLN)` may report the host's full CPU count rather than the cgroup's effective quota, leading to over-subscription.
+</ParamField>
+
+<ParamField path="CBM_DUMP_VERIFY_MIN_RATIO" type="number">
+  **Default:** `0.5`
+
+  After indexing, the server compares the number of persisted SQLite nodes to the in-memory committed count. When the ratio of persisted ÷ committed falls below this threshold (and committed count exceeds 50), `index_repository` returns `status: "degraded"` instead of silently reporting success. Range: 0–1. Set to `0` to disable the check. Invalid values are ignored with a warning.
+</ParamField>
+
+---
+
+## Usage Examples
+
+```bash
+# Store indexes in a custom directory
+export CBM_CACHE_DIR=~/my-projects/cbm-data
+
+# Enable diagnostics for memory/performance investigation
+export CBM_DIAGNOSTICS=1
+
+# Limit workers inside a container with a 4-CPU quota
+export CBM_WORKERS=4
+
+# Verbose logging for debugging
+export CBM_LOG_LEVEL=debug
+
+# Suppress all log output
+export CBM_LOG_LEVEL=none
+```
+
+---
+
+## Setting Variables in the MCP Server Config
+
+The most reliable way to set environment variables for the MCP server is directly in the agent's MCP server configuration. This ensures the variables are set regardless of how the agent launches the binary.
+
+```json
+{
+  "mcpServers": {
+    "codebase-memory-mcp": {
+      "command": "/path/to/codebase-memory-mcp",
+      "args": [],
+      "env": {
+        "CBM_CACHE_DIR": "/custom/path/to/indexes",
+        "CBM_LOG_LEVEL": "debug",
+        "CBM_WORKERS": "4"
+      }
+    }
+  }
+}
+```
+
+This format is supported by Claude Code (`.claude/.mcp.json`), VS Code (`Code/User/mcp.json`), Zed (`settings.json`), and most other MCP-compatible agents. See the agent's documentation for the exact config file location.
+
+---
+
+## Diagnostics
+
+When `CBM_DIAGNOSTICS=1` is set, the server writes two files to the system temp directory on startup and prints their paths to stderr:
+
+```
+level=info msg=diagnostics.start snapshot=/tmp/cbm-diagnostics-12345.json trajectory=/tmp/cbm-diagnostics-12345.ndjson interval=5s
+```
+
+### `cbm-diagnostics-<pid>.ndjson` — Memory trajectory
+
+One JSON line every 5 seconds with the following fields:
+
+| Field | Description |
+|-------|-------------|
+| `rss` | Resident set size in bytes |
+| `committed` | Windows commit charge (or equivalent on Linux/macOS) |
+| `peak_rss` | Peak RSS since process start |
+| `peak_committed` | Peak committed since process start |
+| `page_faults` | Cumulative page faults |
+| `fd` | Open file descriptor count |
+| `queries` | Cumulative query count |
+
+This file is **kept on disk after the server exits** so you can examine it post-mortem. It rotates to `.ndjson.1` when it exceeds approximately 8 MB. This is the primary file for diagnosing memory leaks — the *trend over time* in `rss` and `committed` is what reveals a slow leak.
+
+### `cbm-diagnostics-<pid>.json` — Live snapshot
+
+The latest single data point only, refreshed every 5 seconds. Useful for a quick live check of current memory usage. This file is **removed on clean exit**.
+
+<Note>
+  The diagnostics files contain only resource counters (memory, file descriptors, query counts). They contain no source code, no query text, and no file paths. They are safe to share when reporting memory or performance issues.
+</Note>
+
+To capture a diagnostics session, set the variable in your MCP server config's `env` block, restart the agent, reproduce the issue, and then retrieve the `.ndjson` trajectory file from your system temp directory.

@@ -1,0 +1,116 @@
+---
+title: "Performance Benchmarks: Indexing Speed and Query Latency"
+sidebarTitle: "Performance"
+description: "Codebase Memory MCP benchmarks: Linux kernel in 3 minutes, sub-millisecond Cypher queries, 99% fewer tokens than file-by-file grep exploration."
+---
+
+Codebase Memory MCP is built for speed at every layer — from a RAM-first indexing pipeline that compresses data in memory before ever touching disk, to a SQLite-backed graph that answers structural traversals in under a millisecond. The numbers below are real measurements from an Apple M3 Pro and reflect what you can expect on comparable hardware. Even at kernel scale (28 million lines of code across 75,000 files), indexing completes in under three minutes and queries remain instantaneous.
+
+## Indexing Benchmarks
+
+All benchmarks were run on an **Apple M3 Pro**:
+
+| Operation | Time | Notes |
+|-----------|------|-------|
+| **Linux kernel — full index** | **3 min** | 28M LOC, 75K files → 4.81M nodes, 7.72M edges |
+| Linux kernel — fast index | 1m 12s | 1.88M nodes |
+| Django — full index | ~6s | 49K nodes, 196K edges |
+| Cypher query | \<1ms | Relationship traversal |
+| Name search (regex) | \<10ms | SQL LIKE pre-filtering |
+| Dead code detection | ~150ms | Full graph scan with degree filtering |
+| Trace call path (depth=5) | \<10ms | BFS traversal |
+
+<Note>
+  **Full index** builds the complete multi-pass graph including call edges, HTTP route links, cross-service connections, and community detection. **Fast index** processes fewer passes for lower initial latency and is suited for quick exploration of large repositories.
+</Note>
+
+## Token Efficiency
+
+One of the most significant advantages of graph-based code exploration is the dramatic reduction in token consumption for agents. Where file-by-file grep exploration requires the agent to read many files to piece together structural information, a single graph query returns the complete picture.
+
+<CardGroup cols={2}>
+  <Card title="via Codebase Memory MCP" icon="bolt">
+    **~3,400 tokens** across 5 structural queries
+  </Card>
+  <Card title="via file-by-file search" icon="magnifying-glass">
+    **~412,000 tokens** for equivalent coverage
+  </Card>
+</CardGroup>
+
+That is a **99.2% reduction** in token consumption for the same structural insight. In practice this means lower cost, faster responses, and agents that stay within context limits even on large codebases.
+
+### Research Backing
+
+The design and benchmarks behind Codebase Memory MCP are described in the preprint [*Codebase-Memory: Tree-Sitter-Based Knowledge Graphs for LLM Code Exploration via MCP*](https://arxiv.org/abs/2603.27277) (arXiv:2603.27277). Evaluated across **31 real-world repositories**:
+
+- **83% answer quality** — on par with file-by-file exploration
+- **10× fewer tokens** consumed
+- **2.1× fewer tool calls** required
+
+The result is an agent that understands your codebase more efficiently, not by reading less, but by reading smarter.
+
+## RAM-First Indexing Pipeline
+
+The indexing pipeline is designed to be as fast as the hardware allows. Rather than writing intermediate state to disk during indexing, the entire graph is built in memory and flushed once at the end.
+
+<Steps>
+  <Step title="Compressed Read">
+    Source files are read and compressed in memory using **LZ4 HC** compression, minimising the memory footprint of the file buffer while keeping decompression fast.
+  </Step>
+  <Step title="In-Memory SQLite">
+    The graph database runs entirely in RAM during the indexing pass — no disk I/O on the hot path. Multi-pass analysis (structure → definitions → call edges → HTTP links → tests) operates against the in-memory store.
+  </Step>
+  <Step title="Single Atomic Dump">
+    When all passes complete, the in-memory SQLite database is dumped to disk in a single write. A post-dump integrity check (`CBM_DUMP_VERIFY_MIN_RATIO`) confirms the persisted node count matches the in-memory count.
+  </Step>
+  <Step title="Memory Released">
+    After the dump completes, all indexing memory is released back to the operating system. Only the persistent SQLite file on disk remains.
+  </Step>
+</Steps>
+
+## Performance Tuning
+
+### Worker Count
+
+By default, Codebase Memory MCP detects available CPU cores via `sysconf(_SC_NPROCESSORS_ONLN)` and uses them all for parallel indexing. In containerised environments this can over-report — the host CPU count is visible, but the container's cgroup limits actual throughput.
+
+```bash
+# Limit to the effective quota inside a container
+export CBM_WORKERS=4
+```
+
+The `CBM_WORKERS` environment variable accepts values in the range 1–256. Invalid values are ignored with a warning.
+
+### Full Index vs Fast Index
+
+When calling `index_repository`, you can trade completeness for speed:
+
+- **Full index** — runs all passes including call edge resolution, HTTP route linking, cross-service detection, and community clustering. Produces the richest graph. Best for initial indexing and periodic refreshes.
+- **Fast index** — processes fewer passes, producing a smaller graph more quickly. Useful for very large repositories where you want a first pass before the full graph is ready.
+
+The background watcher uses fast indexing for incremental updates triggered by file changes.
+
+### Auto-Index Limit
+
+The `auto_index_limit` configuration key prevents automatic indexing from triggering on unexpectedly large repositories:
+
+```bash
+# Only auto-index repos with fewer than 50,000 files (default)
+codebase-memory-mcp config set auto_index_limit 50000
+```
+
+This protects against accidentally triggering a multi-minute index on the Linux kernel when you connect your agent to a large monorepo.
+
+## Language Benchmark Summary
+
+Codebase Memory MCP has been evaluated against 35 languages across 64 real open-source repositories ranging from 78 to 49,000 nodes. The overall weighted score across 370 benchmark questions is **91.8%**.
+
+| Tier | Score Range | Languages |
+|------|-------------|-----------|
+| **Excellent** | ≥ 90% | Lua, Kotlin, C++, Perl, Objective-C, Groovy, C, Bash, Zig, Swift, CSS, YAML, TOML, HTML, SCSS, HCL, Dockerfile |
+| **Good** | 75–89% | Python, TypeScript, TSX, Go, Rust, Java, R, Dart, JavaScript, Erlang, Elixir, Scala, Ruby, PHP, C#, SQL |
+| **Functional** | \< 75% | OCaml (72%), Haskell (62%) |
+
+<Tip>
+  For the full per-language breakdown including benchmark methodology, grading criteria, and per-question results across all 35 tested languages, see the [Language Support](/reference/language-support) reference.
+</Tip>

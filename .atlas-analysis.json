@@ -1,0 +1,97 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Codebase Memory MCP",
+  "projectDescription": "A high-performance MCP server that indexes codebases into a persistent knowledge graph for AI coding agents — 158 languages, sub-millisecond queries, 99% fewer tokens, single static binary.",
+  "theme": "aspen",
+  "primaryColor": "#5B6EE8",
+  "lightColor": "#EEF0FD",
+  "darkColor": "#1A1F3C",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/knowledge-graph",
+              "concepts/hybrid-lsp",
+              "concepts/indexing-pipeline"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/agent-setup",
+              "guides/cli-mode",
+              "guides/graph-visualization",
+              "guides/team-shared-graph",
+              "guides/configuration"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/mcp-tools",
+              "reference/cypher-queries",
+              "reference/graph-data-model",
+              "reference/language-support",
+              "reference/environment-variables"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/performance",
+              "operations/troubleshooting",
+              "operations/security"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "158 languages via vendored tree-sitter grammars — zero install, zero runtime dependencies",
+    "Hybrid LSP semantic type resolution for 11 languages (Python, TypeScript, Go, Rust, Java, Kotlin, C/C++, PHP, C#)",
+    "14 MCP tools: index, search, trace call paths, Cypher queries, architecture overview, dead code detection",
+    "Sub-millisecond graph queries and full Linux kernel (28M LOC) indexing in 3 minutes",
+    "99% token reduction vs. file-by-file grep exploration",
+    "Auto-configures 11 AI coding agents (Claude Code, Codex, Gemini CLI, Zed, Aider, KiloCode, etc.)",
+    "Single static binary for macOS, Linux, and Windows — no Docker, no API keys",
+    "Built-in 3D interactive graph visualization at localhost:9749",
+    "Team-shared graph artifact (.codebase-memory/graph.db.zst) for collaborative indexing",
+    "Background file watcher for automatic incremental re-indexing"
+  ],
+  "publicApiSurface": [
+    "index_repository(repo_path, full_index, project)",
+    "search_graph(name_pattern, label, file_pattern, min_degree, max_degree, limit, offset, project)",
+    "trace_path(function_name, direction, depth, project)",
+    "query_graph(query, project)",
+    "get_graph_schema(project)",
+    "get_code_snippet(qualified_name, project)",
+    "get_architecture(project)",
+    "search_code(pattern, project, file_pattern)",
+    "detect_changes(project)",
+    "manage_adr(action, title, content, id, project)",
+    "list_projects()",
+    "delete_project(project)",
+    "index_status(project)",
+    "ingest_traces(traces, project)",
+    "codebase-memory-mcp install",
+    "codebase-memory-mcp uninstall",
+    "codebase-memory-mcp update",
+    "codebase-memory-mcp config set <key> <value>",
+    "codebase-memory-mcp config list",
+    "codebase-memory-mcp config reset <key>",
+    "codebase-memory-mcp cli <tool> <json-args>"
+  ]
+}

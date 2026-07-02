@@ -1,0 +1,472 @@
+---
+title: "MCP Tools Reference: All 14 Tools for Code Intelligence"
+sidebarTitle: "MCP Tools"
+description: "Complete reference for all 14 Codebase Memory MCP tools — index, search, trace, Cypher queries, architecture, ADRs, dead code detection, and more."
+---
+
+Codebase Memory MCP exposes **14 MCP tools** over JSON-RPC 2.0 that let AI coding agents explore, query, and reason about any codebase without reading source files line-by-line. Tools are invoked automatically by your agent (Claude Code, Codex CLI, Zed, and others), or directly from the command line with `codebase-memory-mcp cli <tool_name> '<json_args>'`. Every tool accepts a `project` parameter that scopes results to a single indexed repo; use `list_projects` to discover available project names.
+
+<Tip>
+  Start every session with `get_graph_schema` to understand what has been indexed (node labels, edge types, property definitions), then `list_projects` to confirm the exact project name to pass in subsequent calls.
+</Tip>
+
+---
+
+## Indexing Tools
+
+### `index_repository`
+
+Index a repository into the persistent knowledge graph. The auto-sync watcher keeps the graph fresh after the initial index by detecting file changes in the background.
+
+<ParamField path="repo_path" type="string" required>
+  Absolute path to the repository to index. Relative paths are not supported — always pass a fully-qualified path.
+</ParamField>
+
+<ParamField path="mode" type="string">
+  Indexing depth. One of `full` (default) | `moderate` | `fast` | `cross-repo-intelligence`. All modes run type-aware Hybrid LSP call/usage resolution. `full` adds similarity and semantic edges. `fast` skips similarity/semantic for faster re-indexing. `cross-repo-intelligence` skips extraction and only matches Routes/Channels across projects to create `CROSS_HTTP_CALLS` / `CROSS_ASYNC_CALLS` / `CROSS_CHANNEL` edges.
+</ParamField>
+
+<ParamField path="name" type="string">
+  Override the auto-derived project name. Non-ASCII bytes are encoded and unsafe path characters are normalized.
+</ParamField>
+
+<ParamField path="target_projects" type="array">
+  For `cross-repo-intelligence` mode: list of project names to link against. Pass `["*"]` to target all indexed projects.
+</ParamField>
+
+<ParamField path="persistence" type="boolean">
+  When `true`, writes a compressed snapshot to `.codebase-memory/graph.db.zst` so teammates can bootstrap from the artifact instead of re-indexing from scratch. Defaults to `false`.
+</ParamField>
+
+```bash
+# Index a project (CLI)
+codebase-memory-mcp cli index_repository '{"repo_path": "/absolute/path/to/myapp"}'
+
+# Index with a custom name and team-sharing artifact
+codebase-memory-mcp cli index_repository '{
+  "repo_path": "/workspace/myapp",
+  "name": "myapp",
+  "persistence": true
+}'
+```
+
+---
+
+### `list_projects`
+
+List all indexed projects with their node and edge counts, languages detected, and last-indexed timestamp. Takes no parameters. Run this to discover exact project names before passing them to other tools.
+
+```bash
+codebase-memory-mcp cli list_projects
+```
+
+---
+
+### `delete_project`
+
+Remove a project and all its graph data from the store. This erases the SQLite database file for the project — the operation is irreversible.
+
+<ParamField path="project" type="string" required>
+  The project name to delete. Use `list_projects` to find the exact name.
+</ParamField>
+
+```bash
+codebase-memory-mcp cli delete_project '{"project": "myapp"}'
+```
+
+---
+
+### `index_status`
+
+Check the current indexing status of a project — whether it is indexed, degraded, empty, or not found. Useful for confirming that a background re-index has completed.
+
+<ParamField path="project" type="string" required>
+  Project name to check. Use `list_projects` to find available names.
+</ParamField>
+
+```bash
+codebase-memory-mcp cli index_status '{"project": "myapp"}'
+```
+
+---
+
+## Querying Tools
+
+### `search_graph`
+
+Structured search across the knowledge graph by label, name pattern, file scope, or degree. Supports three independent search modes that can be combined in a single call:
+
+1. **`query`** — BM25 ranked full-text search with camelCase/snake_case splitting and structural label boosting (Functions/Methods +10, Routes +8, Classes/Interfaces +5).
+2. **`name_pattern`** — Regex match against symbol names (SQL `LIKE` pre-filtering for speed).
+3. **`semantic_query`** — Vector cosine search using bundled Nomic embeddings; bridges vocabulary gaps (finds `publish` when you search `send`). Requires `full` or `moderate` index mode.
+
+Results are paginated via `limit` / `offset`. The response always includes `total` (full match count before the limit) and `has_more` (true when more pages are available).
+
+<ParamField path="project" type="string" required>
+  Project name to search within.
+</ParamField>
+
+<ParamField path="query" type="string">
+  Natural-language or keyword full-text search. When provided, `name_pattern` is ignored.
+</ParamField>
+
+<ParamField path="name_pattern" type="string">
+  Regex pattern matched against symbol names (e.g. `.*Handler.*`).
+</ParamField>
+
+<ParamField path="label" type="string">
+  Filter by node label: `Function`, `Method`, `Class`, `Interface`, `Route`, `Enum`, `Type`, `File`, `Module`, `Package`, `Folder`, `Resource`.
+</ParamField>
+
+<ParamField path="file_pattern" type="string">
+  Glob pattern scoping results to matching file paths (e.g. `*.go`, `src/api/**`).
+</ParamField>
+
+<ParamField path="min_degree" type="integer">
+  Minimum total edge degree (in + out). Useful for finding well-connected hotspots.
+</ParamField>
+
+<ParamField path="max_degree" type="integer">
+  Maximum total edge degree. Useful for dead-code detection alongside `NOT EXISTS` Cypher.
+</ParamField>
+
+<ParamField path="semantic_query" type="array">
+  Array of keyword strings for vector search (e.g. `["send", "pubsub", "publish"]`). Must be an array, not a single string. Results appear in the `semantic_results` field.
+</ParamField>
+
+<ParamField path="limit" type="integer">
+  Maximum results per call. Default 200.
+</ParamField>
+
+<ParamField path="offset" type="integer">
+  Skip the first N matching nodes. Combine with `limit` to paginate: increment offset by limit and re-call while `has_more` is true.
+</ParamField>
+
+<ParamField path="exclude_entry_points" type="boolean">
+  Exclude entry-point nodes (e.g. `main` functions) from results.
+</ParamField>
+
+<ParamField path="include_connected" type="boolean">
+  Include connected node metadata in results.
+</ParamField>
+
+```bash
+# Find all HTTP handler functions
+codebase-memory-mcp cli search_graph '{
+  "name_pattern": ".*Handler.*",
+  "label": "Function",
+  "project": "myapp"
+}'
+
+# BM25 full-text search
+codebase-memory-mcp cli search_graph '{
+  "query": "process order payment",
+  "project": "myapp"
+}'
+
+# Vector semantic search
+codebase-memory-mcp cli search_graph '{
+  "semantic_query": ["send", "publish", "emit"],
+  "project": "myapp"
+}'
+```
+
+---
+
+### `trace_path`
+
+BFS traversal through the call graph: who calls a function (inbound), what it calls (outbound), or both. Depth 1–5. Also available as `trace_call_path` (alias).
+
+Supports three trace modes:
+- **`calls`** (default) — follows `CALLS` edges
+- **`data_flow`** — follows `CALLS` + `DATA_FLOWS` edges with argument expressions at each hop
+- **`cross_service`** — follows `HTTP_CALLS` + `ASYNC_CALLS` + `DATA_FLOWS` through Route nodes, plus `CROSS_*` edges to hop across services
+
+<ParamField path="function_name" type="string" required>
+  Name (or qualified name) of the function to trace. Use `search_graph` first if unsure of the exact name.
+</ParamField>
+
+<ParamField path="project" type="string" required>
+  Project to trace within.
+</ParamField>
+
+<ParamField path="direction" type="string">
+  `inbound` (callers), `outbound` (callees), or `both`. Default: `both`.
+</ParamField>
+
+<ParamField path="depth" type="integer">
+  BFS depth, 1–5. Default: 3.
+</ParamField>
+
+<ParamField path="mode" type="string">
+  Trace mode: `calls`, `data_flow`, or `cross_service`. Default: `calls`.
+</ParamField>
+
+<ParamField path="risk_labels" type="boolean">
+  Add risk classification (`CRITICAL` / `HIGH` / `MEDIUM` / `LOW`) based on hop distance. Default: `false`.
+</ParamField>
+
+<ParamField path="include_tests" type="boolean">
+  Include test files in results. When `false` (default), test files are filtered out.
+</ParamField>
+
+```bash
+# Find everything that calls ProcessOrder
+codebase-memory-mcp cli trace_path '{
+  "function_name": "ProcessOrder",
+  "direction": "inbound",
+  "depth": 3,
+  "project": "myapp"
+}'
+
+# Cross-service call trace
+codebase-memory-mcp cli trace_path '{
+  "function_name": "PlaceOrder",
+  "mode": "cross_service",
+  "direction": "outbound",
+  "project": "myapp"
+}'
+```
+
+---
+
+### `detect_changes`
+
+Map uncommitted git changes to affected symbols with blast-radius analysis and risk classification. Identifies which functions, classes, and routes are touched by the current diff and ranks them by impact.
+
+<ParamField path="project" type="string" required>
+  Project to analyze.
+</ParamField>
+
+<ParamField path="scope" type="string">
+  Optional directory prefix to narrow analysis scope.
+</ParamField>
+
+<ParamField path="depth" type="integer">
+  BFS depth for blast-radius propagation. Default: 2.
+</ParamField>
+
+<ParamField path="base_branch" type="string">
+  Git branch to diff against. Default: `main`.
+</ParamField>
+
+<ParamField path="since" type="string">
+  ISO 8601 date-time or git ref — report changes since this point.
+</ParamField>
+
+```bash
+codebase-memory-mcp cli detect_changes '{
+  "project": "myapp",
+  "base_branch": "main",
+  "depth": 3
+}'
+```
+
+---
+
+### `query_graph`
+
+Execute a read-only openCypher query against the knowledge graph for complex multi-hop patterns, aggregations, and cross-service analysis. The full supported subset is documented in [Cypher Queries](/reference/cypher-queries).
+
+Every `Function` and `Method` node carries queryable complexity properties: `cyclomatic`, `cognitive`, `loop_count`, `loop_depth`, `transitive_loop_depth`, `linear_scan_in_loop`, `alloc_in_loop`, `recursion_in_loop`, `unguarded_recursion`, `param_count`, `max_access_depth`.
+
+<ParamField path="query" type="string" required>
+  A read-only openCypher query string.
+</ParamField>
+
+<ParamField path="project" type="string" required>
+  Project to query against.
+</ParamField>
+
+<ParamField path="max_rows" type="integer">
+  Optional row limit. Default: unlimited up to a 100k row ceiling. No offset support — use `search_graph` for paginated browsing.
+</ParamField>
+
+```bash
+codebase-memory-mcp cli query_graph '{
+  "query": "MATCH (f:Function)<-[:CALLS]-() RETURN f.name, count(*) AS call_count ORDER BY call_count DESC LIMIT 10",
+  "project": "myapp"
+}'
+```
+
+---
+
+### `get_graph_schema`
+
+Return the schema of the knowledge graph for a project: node labels with property definitions, edge types with relationship patterns, and total node/edge counts. **Always run this first** when starting to explore a new project.
+
+<ParamField path="project" type="string" required>
+  Project to inspect. Omit only when using single-project stores.
+</ParamField>
+
+```bash
+codebase-memory-mcp cli get_graph_schema '{"project": "myapp"}'
+```
+
+---
+
+### `get_code_snippet`
+
+Read the source code for a function, class, or symbol by its qualified name. This is a **read tool, not a search tool** — it requires an exact `qualified_name`. Use `search_graph` first to discover the qualified name, then pass it here.
+
+<ParamField path="qualified_name" type="string" required>
+  Full qualified name from `search_graph` (e.g. `myapp.src.handlers.ProcessOrder`), or a short function name that returns suggestions when ambiguous.
+</ParamField>
+
+<ParamField path="project" type="string" required>
+  Project the symbol belongs to.
+</ParamField>
+
+<ParamField path="include_neighbors" type="boolean">
+  Include neighboring nodes (callers/callees) alongside the snippet. Default: `false`.
+</ParamField>
+
+```bash
+# Step 1: find the qualified name
+codebase-memory-mcp cli search_graph '{"name_pattern": ".*ProcessOrder.*", "project": "myapp"}'
+
+# Step 2: get the source code
+codebase-memory-mcp cli get_code_snippet '{
+  "qualified_name": "myapp.src.handlers.ProcessOrder",
+  "project": "myapp"
+}'
+```
+
+---
+
+### `get_architecture`
+
+Return a high-level architecture overview of the project: detected languages, packages, entry points, HTTP routes, hotspots (most-called functions), community clusters (Leiden algorithm over the call graph), dependency boundaries, and ADR summary — all in a single call.
+
+The `clusters` field surfaces the *de-facto* architectural modules, which often cut across folder layout. Each cluster includes a label, member count, cohesion score, representative top nodes, and the packages and edge types that bind it.
+
+<ParamField path="project" type="string" required>
+  Project to summarize.
+</ParamField>
+
+<ParamField path="path" type="string">
+  Optional directory prefix to scope architecture analysis to a sub-tree (e.g. `apps/api`).
+</ParamField>
+
+<ParamField path="aspects" type="array">
+  Optional array of aspect names to include (e.g. `["clusters", "routes", "hotspots"]`). Pass `["all"]` for everything.
+</ParamField>
+
+```bash
+codebase-memory-mcp cli get_architecture '{"project": "myapp"}'
+```
+
+---
+
+### `search_code`
+
+Graph-augmented grep — finds text patterns in indexed source files, then enriches results with graph context (callers, callees, related nodes). Faster than raw grep because it searches only files known to the index.
+
+<ParamField path="pattern" type="string" required>
+  Text or regex pattern to search for (grep syntax).
+</ParamField>
+
+<ParamField path="project" type="string" required>
+  Project to search within.
+</ParamField>
+
+<ParamField path="file_pattern" type="string">
+  Glob for `grep --include` to restrict file types (e.g. `*.go`, `*.ts`).
+</ParamField>
+
+<ParamField path="path_filter" type="string">
+  Regex to restrict results to specific file paths.
+</ParamField>
+
+<ParamField path="mode" type="string">
+  Output format: `compact` (default), `full`, or `files` (just file paths).
+</ParamField>
+
+<ParamField path="context" type="integer">
+  Lines of context around each match (like `grep -C`).
+</ParamField>
+
+<ParamField path="limit" type="integer">
+  Max enriched results per call. Default: 10.
+</ParamField>
+
+```bash
+codebase-memory-mcp cli search_code '{
+  "pattern": "TODO|FIXME",
+  "file_pattern": "*.go",
+  "project": "myapp"
+}'
+```
+
+---
+
+### `manage_adr`
+
+CRUD interface for Architecture Decision Records (ADRs). ADRs persist structured architectural notes across agent sessions so context is never lost.
+
+<ParamField path="project" type="string" required>
+  Project the ADR belongs to.
+</ParamField>
+
+<ParamField path="mode" type="string">
+  Operation: `get` (read current ADR), `update` (create or overwrite), `sections` (list markdown headers from the ADR).
+</ParamField>
+
+<ParamField path="content" type="string">
+  Markdown content for `update` mode.
+</ParamField>
+
+<ParamField path="sections" type="array">
+  Array of section header strings to include or filter on.
+</ParamField>
+
+```bash
+# Read the current ADR
+codebase-memory-mcp cli manage_adr '{"mode": "get", "project": "myapp"}'
+
+# Write an architectural decision
+codebase-memory-mcp cli manage_adr '{
+  "mode": "update",
+  "project": "myapp",
+  "content": "## Auth Strategy\nUsing JWT tokens with 15-minute expiry. Refresh tokens stored in HttpOnly cookies."
+}'
+```
+
+---
+
+### `ingest_traces`
+
+Ingest runtime traces to validate and enrich `HTTP_CALLS` edges in the graph. Allows correlating static analysis with observed runtime behavior — edges that appear in traces are promoted to higher confidence.
+
+<ParamField path="traces" type="array" required>
+  Array of trace objects. Each object should describe an observed HTTP call with source, destination, and method fields.
+</ParamField>
+
+<ParamField path="project" type="string" required>
+  Project to ingest traces into.
+</ParamField>
+
+```bash
+codebase-memory-mcp cli ingest_traces '{
+  "traces": [
+    {"caller": "OrderService.placeOrder", "route": "/api/payments/charge", "method": "POST"},
+    {"caller": "NotificationService.send", "route": "/api/emails/send", "method": "POST"}
+  ],
+  "project": "myapp"
+}'
+```
+
+---
+
+## CLI Quick Reference
+
+Every tool can be called from the command line. Use `--raw` to pipe output to `jq`:
+
+```bash
+# Pipe results to jq
+codebase-memory-mcp cli --raw search_graph '{"label": "Route", "project": "myapp"}' \
+  | jq '.results[].name'
+
+# Full CLI syntax
+codebase-memory-mcp cli <tool_name> '<json_args>'
+```

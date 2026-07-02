@@ -1,0 +1,151 @@
+---
+title: "Security, Privacy, and Supply Chain for Codebase Memory MCP"
+sidebarTitle: "Security"
+description: "Codebase Memory MCP runs 100% locally, collects no telemetry, and ships with SLSA Level 3 provenance, Sigstore signatures, and VirusTotal verification."
+---
+
+Codebase Memory MCP reads your codebase and writes to your agent configuration files. That is exactly what it is designed to do — and by design, it does nothing else. All indexing, graph queries, semantic search, and MCP tool handling run entirely on your machine. Your source code, repository paths, graph indexes, query contents, environment variables, and usage patterns are never uploaded anywhere. There is zero telemetry. Every release binary is independently verifiable before you run it.
+
+## Privacy Guarantee
+
+All processing happens **100% locally**. The MCP server does not upload source code, graph indexes, query contents, environment variables, or usage metrics. Your code never leaves your machine.
+
+The one external runtime check is an optional background update notice: after MCP `initialize`, the server starts a background thread that requests release metadata from `https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest`. This request carries no project data — only standard HTTPS metadata visible to GitHub and the network path. It is non-blocking, bounded by a 5-second timeout, and silently ignored if the machine is offline or GitHub is unreachable.
+
+All other network activity — install, package manager, and `codebase-memory-mcp update` flows — is explicit and user-initiated.
+
+## What the Binary Does
+
+Understanding exactly what a tool does on your machine is reasonable due diligence. Here is the complete list of what Codebase Memory MCP does during normal operation:
+
+<CardGroup cols={2}>
+  <Card title="Reads" icon="file-magnifying-glass">
+    Source files in the indexed repository, subject to `.gitignore` and `.cbmignore` rules.
+  </Card>
+  <Card title="Writes (indexes)" icon="database">
+    SQLite databases to `~/.cache/codebase-memory-mcp/` containing the knowledge graph.
+  </Card>
+  <Card title="Writes (install only)" icon="gear">
+    MCP config entries and instruction files to agent config directories during the `install` command.
+  </Card>
+  <Card title="Listens" icon="terminal">
+    On stdin/stdout for JSON-RPC MCP messages from your agent.
+  </Card>
+  <Card title="Serves (UI variant only)" icon="globe">
+    HTTP on `localhost:9749` for the optional 3D graph visualization interface. CORS is locked to localhost origins.
+  </Card>
+  <Card title="Never" icon="ban">
+    Makes outbound network requests during normal indexing or query operation. The update check is the only background request and is opt-out via not running `update`.
+  </Card>
+</CardGroup>
+
+### Code-Level Protections
+
+Several defences are built into the binary itself:
+
+- **Shell injection prevention** — `cbm_validate_shell_arg()` rejects metacharacters before all `popen()`/`system()` calls
+- **SQLite authorizer** — blocks `ATTACH`/`DETACH` at the engine level, preventing file creation via SQL injection
+- **Path containment** — `realpath()` checks prevent reading files outside the indexed project root
+- **Process-kill restriction** — only server-spawned PIDs can be terminated
+- **CORS locked to localhost** — the graph UI only accepts requests from localhost origins
+
+## Supply Chain Verification
+
+Every release binary passes a multi-layer verification pipeline before it is published. Releases are created as drafts (invisible to users) and only made public after all checks pass.
+
+<Steps>
+  <Step title="VirusTotal — 70+ AV Engines">
+    All binaries are uploaded to VirusTotal and scanned by 70+ antivirus engines before each release. Zero detections are required to publish — any flag keeps the release as a draft until the issue is investigated and resolved.
+  </Step>
+  <Step title="SLSA Level 3 — Cryptographic Build Provenance">
+    GitHub Actions generates cryptographic attestations proving that each binary was built from this repository's source code. You can verify this yourself:
+
+    ```bash
+    gh attestation verify codebase-memory-mcp-linux-amd64.tar.gz \
+      --repo DeusData/codebase-memory-mcp
+    ```
+  </Step>
+  <Step title="Sigstore Cosign — Keyless Signatures">
+    All release artifacts are signed using keyless Sigstore cosign signatures. Signature bundles are included in every release and can be verified independently:
+
+    ```bash
+    cosign verify-blob --bundle <file>.bundle <file>
+    ```
+  </Step>
+  <Step title="SHA-256 Checksums">
+    A `checksums.txt` file containing SHA-256 hashes for every release artifact is published with each release. Both install scripts verify the checksum before extracting any binary.
+  </Step>
+  <Step title="CodeQL SAST">
+    Static application security testing with CodeQL runs on every push, including taint analysis, CWE detection, and data flow tracking. Any open alert blocks the release pipeline.
+  </Step>
+  <Step title="Zero Runtime Dependencies">
+    All libraries are vendored at compile time and compiled into the static binary. There is no transitive supply chain to attack at runtime — no dynamic linking, no package manager downloads at execution time.
+  </Step>
+</Steps>
+
+## Verifying a Release Binary
+
+You can independently verify any release binary before running it. Download the archive and `checksums.txt` from the [latest release](https://github.com/DeusData/codebase-memory-mcp/releases/latest), then:
+
+```bash
+# Verify SHA-256 checksum
+sha256sum -c checksums.txt
+
+# Verify SLSA provenance (proves binary came from this repo's CI)
+gh attestation verify codebase-memory-mcp-linux-amd64.tar.gz \
+  --repo DeusData/codebase-memory-mcp
+
+# Verify Sigstore cosign signature
+cosign verify-blob \
+  --bundle codebase-memory-mcp-linux-amd64.tar.gz.bundle \
+  codebase-memory-mcp-linux-amd64.tar.gz
+```
+
+The install scripts (`install.sh` / `install.ps1`) included in every archive perform the checksum verification automatically before extracting anything.
+
+## Reporting Vulnerabilities
+
+Security is Priority #1 for this project. If you discover a vulnerability — from a logic bug to a remote code execution — please report it **privately** so it can be fixed before public disclosure.
+
+<Warning>
+  Do **not** open a public issue, pull request, or social media post for security vulnerabilities. Public disclosure before a fix is available puts all users at risk.
+</Warning>
+
+**Preferred:** Use GitHub's [private vulnerability reporting](https://github.com/DeusData/codebase-memory-mcp/security/advisories/new) via the repository's **Security → Report a vulnerability** button. This opens a private advisory automatically.
+
+**Alternative:** Email martin.vogel.tech@gmail.com.
+
+**Include in your report:**
+- Description of the vulnerability
+- Steps to reproduce
+- Affected version
+- Potential impact
+- Your GitHub handle and contact email (for credit and to verify the fix before release — anonymous reports are also welcome)
+
+**Response targets** (best-effort, solo-maintained project):
+- Acknowledgement within **7 days** (usually sooner)
+- Initial assessment and severity within **14 days**
+- Fix developed and released within **90 days**, expedited for high-severity issues
+
+Fixes are developed privately, validated across all supported platforms, released, and only then disclosed publicly via a [GitHub Security Advisory](https://github.com/DeusData/codebase-memory-mcp/security/advisories) with a CVE and credit to the reporter. The full handling process is documented in [`docs/SECURITY-DISCLOSURE.md`](https://github.com/DeusData/codebase-memory-mcp/blob/main/docs/SECURITY-DISCLOSURE.md).
+
+**Safe harbor:** Security research conducted in good faith — accessing only your own test data, avoiding privacy violations and service disruption, and giving reasonable time to fix before public disclosure — is considered authorised. No legal action will be pursued against researchers acting under this policy.
+
+## Windows SmartScreen Warning
+
+On Windows, SmartScreen may display a warning when running the binary for the first time, because the binary is not code-signed with a commercial certificate. This is expected behaviour for open-source tools distributed outside the Microsoft Store.
+
+To proceed:
+
+1. Click **"More info"** in the SmartScreen dialog
+2. Click **"Run anyway"**
+
+Before doing so, verify the binary's integrity using `checksums.txt` from the release:
+
+```powershell
+# PowerShell checksum verification
+Get-FileHash codebase-memory-mcp-windows-amd64.zip -Algorithm SHA256
+# Compare the output against checksums.txt
+```
+
+If the hash matches, the binary is identical to what was published and scanned by 70+ antivirus engines at release time.

@@ -1,0 +1,79 @@
+---
+title: "Share a Pre-Built Knowledge Graph with Your Team"
+sidebarTitle: "Team Shared Graph"
+description: "Commit .codebase-memory/graph.db.zst to your repo so teammates skip the full reindex — a zstd-compressed SQLite snapshot with zero merge conflicts."
+---
+
+When a teammate clones your repository, they normally pay the full indexing cost before they can use the knowledge graph. The team-shared graph artifact eliminates that wait: you commit a single compressed file to your repo, and anyone who pulls it gets an instantly importable snapshot. Their first `index_repository` decompresses the artifact, applies a small incremental diff for any local changes, and is done in seconds instead of minutes.
+
+## What the Artifact Is
+
+`.codebase-memory/graph.db.zst` is a zstd-compressed snapshot of the SQLite knowledge graph, written next to your source code in a `.codebase-memory/` directory at the repo root.
+
+**Format details:**
+- SQLite database, indexes stripped, `VACUUM INTO` compacted, then zstd 1.5.7 compressed
+- Typical compression ratio: **8–13:1** relative to the raw SQLite file
+- Two export tiers for different latency requirements:
+
+| Tier | Compression | Trigger | Use case |
+|------|------------|---------|----------|
+| **Best** | `zstd -9` + index strip + `VACUUM INTO` | Explicit `index_repository` call | Committing to the repo |
+| **Fast** | `zstd -3` | Background watcher incremental update | Low-latency local refreshes |
+
+## Bootstrap Behavior
+
+When the MCP server starts on a machine where no local database exists but `.codebase-memory/graph.db.zst` is present in the repo, `index_repository` automatically:
+
+1. Decompresses and imports the artifact into the local SQLite store
+2. Runs incremental indexing to apply any changes made since the snapshot was taken
+3. Registers the project with the background watcher for ongoing sync
+
+This means teammates skip the full reindex cost entirely — they only pay for the diff since the artifact was last committed.
+
+## How to Enable
+
+After running `index_repository` on your project, the artifact is written automatically. Commit it:
+
+```bash
+# After indexing, the artifact is written automatically to .codebase-memory/graph.db.zst
+# Add it to version control:
+git add .codebase-memory/graph.db.zst
+git commit -m "chore: add codebase knowledge graph artifact"
+git push
+```
+
+Teammates will have the artifact available immediately on their next `git pull`.
+
+## Merge Conflict Prevention
+
+The artifact is a binary file, so standard three-way merges are meaningless on it. Codebase Memory MCP automatically creates a `.gitattributes` entry on first export:
+
+```
+.codebase-memory/graph.db.zst merge=ours
+```
+
+This tells Git to always keep your local version when resolving conflicts on the artifact, so concurrent commits from different developers never produce a merge conflict on the binary file.
+
+<Note>
+  The `.gitattributes` line is created automatically — you do not need to add it manually. Check it in alongside the artifact on your first commit.
+</Note>
+
+## Opting Out
+
+If you prefer that every developer reindexes from scratch (for example, on a very large monorepo where the artifact itself would be too large to store in Git), add the directory to `.gitignore`:
+
+```bash
+# .gitignore
+.codebase-memory/
+```
+
+When the directory is gitignored, the artifact is never committed and each developer performs a full index on first use.
+
+## Comparison to Similar Tools
+
+The team-shared graph artifact is conceptually similar to [graphify](https://github.com/Exafunction/graphify)'s `graphify-out/` directory, but implemented as:
+
+- **A single compressed file** instead of a directory of many files
+- **Explicit two-tier export** (best vs. fast) rather than a single export path
+- **Integrity-checked import** — the decompressed database is validated before the local store is replaced
+- **Zero merge friction** via the auto-created `.gitattributes` rule

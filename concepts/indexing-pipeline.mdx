@@ -1,0 +1,195 @@
+---
+title: "How Codebase Memory MCP Indexes Your Code"
+sidebarTitle: "Indexing Pipeline"
+description: "The multi-pass indexing pipeline processes 158 languages via tree-sitter, applies Hybrid LSP type resolution, and dumps a SQLite graph in milliseconds."
+---
+
+When you tell Codebase Memory MCP to index a repository, it runs a deterministic multi-pass pipeline that transforms source files into a typed knowledge graph. The design goal is maximum throughput at minimum peak memory: all work happens in RAM (in-memory SQLite with LZ4-compressed source buffers), workers run in parallel across all available cores, and the pipeline dumps to disk exactly once at the end before releasing its memory back to the OS. A full index of Django (49K nodes, 196K edges) completes in roughly 6 seconds on an M3 Pro. The Linux kernel — 28 million lines across 75,000 files — completes in 3 minutes.
+
+---
+
+## Pipeline Stages
+
+<Steps>
+  <Step title="File discovery">
+    The pipeline walks the repository tree, applying a layered filter stack to decide which files to index. Symlinks are always skipped. Hardcoded always-skip directories (`.git`, `node_modules`, build artifacts, IDE dirs, language caches) are pruned first. Then `.gitignore` patterns are applied at each directory level. A project-specific `.cbmignore` file (gitignore syntax) can add further exclusions. Finally, custom file extensions from `.codebase-memory.json` are resolved so framework-specific extensions like `.blade.php` or `.mjs` are correctly mapped to their language.
+
+    The discovered file list is handed to the parallel worker pool and to the manifest scanner (for package map building) simultaneously.
+  </Step>
+
+  <Step title="Package map build">
+    Before extraction begins, manifest files are scanned to build a **package map**: a hash table from bare module specifiers to their in-repo entry points. Supported manifests include `package.json` (npm workspaces, `exports`), `go.mod`, `Cargo.toml`, `pyproject.toml`, `composer.json`, `pubspec.yaml`, `pom.xml`, `build.gradle`, `mix.exs`, and `*.gemspec`. This allows bare specifiers like `@myorg/pkg` or `github.com/foo/bar` to resolve to a sibling `Module` node rather than being left as unresolvable external imports.
+  </Step>
+
+  <Step title="Structure pass">
+    `Project`, `Folder`, `Package`, and `File` nodes are created for the entire directory tree. This runs serially before extraction so that every subsequent pass can attach definition nodes to already-existing parent nodes without coordination overhead.
+  </Step>
+
+  <Step title="Parallel extraction — definitions">
+    Each file is assigned to a worker. The worker reads the source into a LZ4-HC compressed arena buffer, runs the tree-sitter AST extraction for that file's language, and emits definition nodes: `Function`, `Class`, `Method`, `Interface`, `Enum`, `Type`. Extraction results are cached in a per-file slot so later passes can reuse the AST without re-reading from disk.
+
+    After all workers finish, the main thread builds the global **function registry** — a hash table from short names and qualified names to node IDs — used by every subsequent resolution pass.
+  </Step>
+
+  <Step title="Parallel resolution — calls, imports, usages, semantics">
+    The resolve pass runs in parallel over all files, sharing the registry and the pre-built cross-file Hybrid LSP registries. Each worker:
+
+    1. Runs the per-file **Hybrid LSP** pass (Python, TypeScript/JS/JSX/TSX, PHP, C#, Go, C/C++, Java, Kotlin, Rust) to produce type-aware `RESOLVED_CALLS` entries for that file.
+    2. Looks up cross-file Hybrid LSP resolutions from the pre-built per-language registry (Go, Python, C/C++, C#, TypeScript/JS — built once and shared read-only across all workers).
+    3. Emits `CALLS`, `IMPORTS`, `USAGE`, `INHERITS`, `IMPLEMENTS`, `USES_TYPE`, and `DATA_FLOWS` edges using the best available resolution strategy.
+
+    The cross-file module-def index (inspired by gopls's per-package summary pattern) ensures each worker only loads the defs relevant to its file's imports — typically 50–100× fewer than the full project-wide set.
+  </Step>
+
+  <Step title="Infrastructure and Kubernetes pass">
+    Dockerfiles, Kubernetes YAML manifests, Kustomize overlays, Docker Compose files, Terraform HCL, shell scripts, and `.env` files are processed separately from the language tree-sitter passes. Kubernetes resources become `Resource` nodes keyed by kind and name. Kustomize overlays become `Module` nodes with `IMPORTS` edges to the resources they reference. `CONFIGURES` and `WRITES` edges are created where config values are bound to code symbols.
+  </Step>
+
+  <Step title="Pre-dump passes">
+    After the parallel resolve phase completes, a set of serial pre-dump passes refine the graph:
+
+    - **Route matching** — `HTTP_CALLS` / `ASYNC_CALLS` edges with URL path properties are matched against `Route` nodes; call sites that pointed at library functions are re-targeted to the correct route.
+    - **Tests pass** — files and functions that match test-path patterns (`_test.go`, `test_*.py`, `*.spec.ts`, JUnit class names, etc.) get `TESTS` edges connecting test functions to the symbols they exercise.
+    - **Decorator tags enrichment** — Python/TypeScript decorator names are tokenized and attached as tags for search and architecture queries.
+    - **Config linking** — environment variable names and config keys referenced in code are correlated with config file bindings.
+    - **Similarity edges** — MinHash fingerprinting detects near-clone functions (`SIMILAR_TO`, Jaccard-scored). Only in `FULL` and `MODERATE` index modes.
+    - **Semantic edges** — Algorithmic embeddings pair functions that are semantically related under different names (`SEMANTICALLY_RELATED`, score ≥ 0.80). Only in `FULL` and `MODERATE` modes.
+    - **Complexity propagation** — Per-function loop depth is propagated along `CALLS` edges into a transitive worst-case nested-loop estimate; call-graph cycles are flagged as recursive.
+    - **Git history** — Change coupling is computed from `git log` output (runs on a background thread concurrently with the pre-dump passes). Files that frequently change together get `FILE_CHANGES_WITH` edges. File nodes receive `change_count` and `last_modified` properties for hotspot analysis.
+  </Step>
+
+  <Step title="SQLite dump">
+    The in-memory graph buffer is written to the SQLite database in a single transaction. A plausibility check compares the persisted node count to the in-memory count — if the ratio falls below the configured threshold (`CBM_DUMP_VERIFY_MIN_RATIO`, default `0.5`), `index_repository` returns `status: "degraded"` rather than silently accepting a partial write. WAL mode is enabled on the database file for ACID-safe concurrent reads during future queries. The in-memory buffers are freed after the dump completes, returning memory to the OS.
+  </Step>
+</Steps>
+
+---
+
+## RAM-First Pipeline
+
+The entire indexing run happens in memory. Source files are read once and compressed with **LZ4 HC** into arena buffers — the compression ratio is high enough that even the Linux kernel fits in a manageable working set. SQLite is opened in-memory mode for the duration of the pipeline and flushed to disk in a single `VACUUM INTO` dump at the end.
+
+<Note>
+On large repositories, memory usage peaks during the registry build phase. The pipeline explicitly calls `cbm_mem_collect()` after extraction to return freed pages to the OS before the registry allocates — preventing memory-pressure OOM kills that would occur if both peaks overlapped.
+</Note>
+
+Worker count defaults to the number of available CPU cores and can be overridden with `CBM_WORKERS` — useful inside containers where `sysconf(_SC_NPROCESSORS_ONLN)` reports host CPUs rather than the cgroup's effective quota.
+
+---
+
+## Auto-Sync / Background Watcher
+
+After initial indexing, the background watcher keeps the graph current automatically. It polls each indexed project for git changes using an **adaptive interval**:
+
+```
+interval = clamp(5s + (1s per 500 files), min=5s, max=60s)
+```
+
+A small project with 200 files is polled every 5 seconds. A large project with 30,000 files is polled every 60 seconds. The watcher checks two signals:
+
+1. **HEAD movement** — a new commit, checkout, or pull (`git rev-parse HEAD`)
+2. **Dirty working tree** — uncommitted modifications (`git status --porcelain`)
+
+When either signal fires, the watcher triggers an incremental re-index: only changed files are re-extracted and their edges are re-resolved. The watcher runs only for git repositories; non-git directories are skipped.
+
+Auto-indexing on session start is opt-in:
+
+```bash
+codebase-memory-mcp config set auto_index true
+codebase-memory-mcp config set auto_index_limit 50000   # skip repos larger than this
+```
+
+---
+
+## File Filtering
+
+File discovery applies filters in strict priority order. Once a path is excluded at any layer, it is not reconsidered.
+
+<Steps>
+  <Step title="Hardcoded always-skip directories">
+    Applied unconditionally, regardless of index mode. Covers VCS directories (`.git`, `.hg`, `.svn`), IDE state (`.idea`, `.vscode`, `.vs`), Python virtual environments and caches (`.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.tox`), JavaScript tooling (`node_modules`, `.npm`, `.yarn`, `.pnpm-store`, `bower_components`, `coverage`, `.next`, `.nuxt`, `.angular`, `.turbo`), build artifacts (`dist`, `obj`, `target`, `Pods`, `.terraform`, `bazel-bin`, `bazel-out`), and language caches (`.cargo`, `.stack-work`, `.dart_tool`, `zig-cache`, `.metals`, `.bloop`).
+  </Step>
+
+  <Step title=".gitignore hierarchy">
+    `.gitignore` files are loaded at each directory level and applied to subdirectory contents. The global git ignore file (`~/.config/git/ignore` or `core.excludesFile`) is also respected. Per-directory `.gitignore` patterns apply only to paths below that directory.
+  </Step>
+
+  <Step title=".cbmignore">
+    A project-specific ignore file at the repository root, using gitignore syntax. Use this to exclude paths that are tracked by git but should not be indexed — generated code directories, large fixture files, vendored third-party directories that gitignore does not cover.
+
+    ```gitignore
+    # .cbmignore
+    generated/
+    fixtures/large_dataset/
+    vendor/
+    ```
+  </Step>
+
+  <Step title="Hardcoded file suffix filters">
+    Binary and non-code file types are always skipped regardless of extension mapping: compiled objects (`.o`, `.a`, `.so`, `.class`, `.pyc`, `.wasm`), images (`.png`, `.jpg`, `.gif`, `.svg`, `.webp`), fonts (`.woff`, `.ttf`, `.otf`), databases (`.db`, `.sqlite`, `.sqlite3`), and executables (`.exe`, `.bin`).
+  </Step>
+</Steps>
+
+<Warning>
+Symlinks are always skipped — both symlinked files and symlinked directories. This prevents infinite loops in repos with circular symlinks and avoids double-indexing shared subtrees.
+</Warning>
+
+### Custom file extensions
+
+Map additional extensions to supported languages in `.codebase-memory.json` at your repo root (project-level) or in `~/.config/codebase-memory-mcp/config.json` (global):
+
+```json
+{
+  "extra_extensions": {
+    ".blade.php": "php",
+    ".mjs": "javascript",
+    ".cjs": "javascript"
+  }
+}
+```
+
+Project-level config overrides global config for conflicting extensions. Unknown language values are silently skipped.
+
+---
+
+## Infrastructure-as-Code Indexing
+
+Codebase Memory MCP indexes infrastructure files as first-class graph nodes, not just as plain files.
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes manifests" icon="server">
+    Each resource kind (Deployment, Service, ConfigMap, CronJob, etc.) becomes a `Resource` node. Labels, annotations, and container image references are stored as properties. `CONFIGURES` edges link config maps to the pods that mount them.
+  </Card>
+  <Card title="Kustomize overlays" icon="layers">
+    Each overlay becomes a `Module` node. `IMPORTS` edges connect it to the base resources and patches it references, making the full overlay hierarchy traversable in Cypher queries.
+  </Card>
+  <Card title="Dockerfiles" icon="box">
+    Base images, exposed ports, environment variables, `CMD`, `ENTRYPOINT`, and multi-stage build references are extracted and stored as properties on `File` nodes.
+  </Card>
+  <Card title="Terraform" icon="cloud">
+    Resources, data sources, variables, outputs, providers, and module calls are extracted. Resource nodes are linked to the provider and to any other resources they reference.
+  </Card>
+</CardGroup>
+
+Environment variable bindings found in `.env` files, shell scripts, YAML configs, and Terraform are correlated with the code symbols that consume them via `CONFIGURES` edges — so `get_architecture` can surface which secrets and config keys each service depends on.
+
+---
+
+## Cross-Repo Intelligence
+
+When multiple repositories are indexed into the same store (same `CBM_CACHE_DIR`), the cross-repo pass runs after each individual index completes. It scans `Route` nodes, channel topics, and async queue names across all projects and emits `CROSS_*` edges where a call site in one service matches a handler in another.
+
+This enables multi-galaxy 3D visualization in the UI variant and makes `trace_path` with `mode: "cross_service"` traverse service boundaries automatically — following `CROSS_HTTP_CALLS`, `CROSS_ASYNC_CALLS`, `CROSS_CHANNEL`, `CROSS_GRPC_CALLS`, `CROSS_GRAPHQL_CALLS`, and `CROSS_TRPC_CALLS` edges as naturally as intra-service `CALLS` edges.
+
+```bash
+# Index two services into the same store
+codebase-memory-mcp cli index_repository '{"repo_path": "/projects/api-gateway"}'
+codebase-memory-mcp cli index_repository '{"repo_path": "/projects/user-service"}'
+
+# Now trace across the boundary
+codebase-memory-mcp cli trace_path '{
+  "function_name": "createUser",
+  "direction": "outbound",
+  "mode": "cross_service"
+}'
+```
