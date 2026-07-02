@@ -10,7 +10,7 @@ Codebase Memory MCP reads your codebase and writes to your agent configuration f
 
 All processing happens **100% locally**. The MCP server does not upload source code, graph indexes, query contents, environment variables, or usage metrics. Your code never leaves your machine.
 
-The one external runtime check is an optional background update notice: after MCP `initialize`, the server starts a background thread that requests release metadata from `https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest`. This request carries no project data — only standard HTTPS metadata visible to GitHub and the network path. It is non-blocking, bounded by a 5-second timeout, and silently ignored if the machine is offline or GitHub is unreachable.
+The one external runtime check is a background update-check: after MCP `initialize`, the server starts a background thread that requests release metadata from `https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest`. This request carries no project data — only standard HTTPS metadata visible to GitHub and the network path. It is non-blocking, bounded by a 5-second timeout, and silently ignored if the machine is offline or GitHub is unreachable.
 
 All other network activity — install, package manager, and `codebase-memory-mcp update` flows — is explicit and user-initiated.
 
@@ -35,7 +35,7 @@ Understanding exactly what a tool does on your machine is reasonable due diligen
     HTTP on `localhost:9749` for the optional 3D graph visualization interface. CORS is locked to localhost origins.
   </Card>
   <Card title="Never" icon="ban">
-    Makes outbound network requests during normal indexing or query operation. The update check is the only background request and is opt-out via not running `update`.
+    Uploads source code, query contents, environment variables, or telemetry. The only outbound request is an automatic background update-check that fires after MCP `initialize` — it sends no project data, only requests release metadata from GitHub, and is silently ignored if the machine is offline.
   </Card>
 </CardGroup>
 

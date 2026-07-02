@@ -175,7 +175,7 @@ Find functions with no callers that are also not entry points:
 
 ```cypher
 MATCH (f:Function)
-WHERE NOT EXISTS { ()<-[:CALLS]-(f) }
+WHERE NOT EXISTS { (f)<-[:CALLS]-() }
   AND NOT f.name IN ['main', 'handler', 'run']
 RETURN f.name, f.file_path
 ORDER BY f.name

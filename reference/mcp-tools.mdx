@@ -138,6 +138,14 @@ Results are paginated via `limit` / `offset`. The response always includes `tota
   Maximum results per call. Default 200.
 </ParamField>
 
+<ParamField path="qn_pattern" type="string">
+  Regex pattern matched against the fully-qualified symbol name (e.g. `myapp\.src\.handlers\..*`). Useful for scoping to a specific package or path within the graph.
+</ParamField>
+
+<ParamField path="relationship" type="string">
+  Edge type to use when fetching connected nodes (used with `include_connected`). Must be uppercase letters and underscores, e.g. `CALLS`, `IMPORTS`.
+</ParamField>
+
 <ParamField path="offset" type="integer">
   Skip the first N matching nodes. Combine with `limit` to paginate: increment offset by limit and re-call while `has_more` is true.
 </ParamField>
@@ -202,6 +210,14 @@ Supports three trace modes:
   Trace mode: `calls`, `data_flow`, or `cross_service`. Default: `calls`.
 </ParamField>
 
+<ParamField path="parameter_name" type="string">
+  For `data_flow` mode only: scope the trace to a specific parameter name, following only paths where that parameter is passed.
+</ParamField>
+
+<ParamField path="edge_types" type="array">
+  Array of edge type strings to follow during traversal (e.g. `["CALLS", "ASYNC_CALLS"]`). Overrides the default edge set for the selected mode.
+</ParamField>
+
 <ParamField path="risk_labels" type="boolean">
   Add risk classification (`CRITICAL` / `HIGH` / `MEDIUM` / `LOW`) based on hop distance. Default: `false`.
 </ParamField>
@@ -251,7 +267,7 @@ Map uncommitted git changes to affected symbols with blast-radius analysis and r
 </ParamField>
 
 <ParamField path="since" type="string">
-  ISO 8601 date-time or git ref — report changes since this point.
+  Git ref or tag to compare from (e.g. `HEAD~5`, `v0.5.0`). Diffs `<ref>...HEAD`. Use this to scope analysis to changes since a specific commit or release.
 </ParamField>
 
 ```bash
@@ -296,7 +312,7 @@ codebase-memory-mcp cli query_graph '{
 Return the schema of the knowledge graph for a project: node labels with property definitions, edge types with relationship patterns, and total node/edge counts. **Always run this first** when starting to explore a new project.
 
 <ParamField path="project" type="string" required>
-  Project to inspect. Omit only when using single-project stores.
+  Project to inspect.
 </ParamField>
 
 ```bash
@@ -382,8 +398,12 @@ Graph-augmented grep — finds text patterns in indexed source files, then enric
   Output format: `compact` (default), `full`, or `files` (just file paths).
 </ParamField>
 
+<ParamField path="regex" type="boolean">
+  Enable extended regex mode for the pattern (like `grep -E`). Default: `false` (fixed-string match).
+</ParamField>
+
 <ParamField path="context" type="integer">
-  Lines of context around each match (like `grep -C`).
+  Lines of context around each match (like `grep -C`). Only used in `compact` mode.
 </ParamField>
 
 <ParamField path="limit" type="integer">

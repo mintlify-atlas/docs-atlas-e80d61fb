@@ -1,7 +1,7 @@
 ---
 title: "Install Codebase Memory MCP on macOS, Linux, and Windows"
 sidebarTitle: "Installation"
-description: "All installation methods for Codebase Memory MCP: one-line installer, Homebrew, AUR, npm, PyPI, Scoop, Winget, Chocolatey, go install, and build from source."
+description: "Every install method for Codebase Memory MCP: one-liner, Homebrew, AUR, npm, PyPI, Scoop, Winget, Chocolatey, go install, and build from source."
 ---
 
 Codebase Memory MCP ships as a single static binary with zero runtime dependencies — no Docker, no Node.js runtime, no Python interpreter, no API keys. Every release is checksummed, signed, and scanned by 70+ antivirus engines before publication. Pick the installation method that fits your workflow: the one-line installer handles everything automatically, or choose a package manager you already use.
@@ -96,6 +96,7 @@ Every release publishes pre-built, statically-linked binaries for all supported 
 <CardGroup cols={2}>
   <Card title="Homebrew (macOS / Linux)" icon="apple">
     ```bash
+    brew tap deusdata/codebase-memory-mcp https://github.com/DeusData/codebase-memory-mcp
     brew install codebase-memory-mcp
     ```
   </Card>
@@ -109,13 +110,19 @@ Every release publishes pre-built, statically-linked binaries for all supported 
     Package page: [aur.archlinux.org/packages/codebase-memory-mcp-bin](https://aur.archlinux.org/packages/codebase-memory-mcp-bin)
   </Card>
   <Card title="npm" icon="npm">
-    No install required — run directly with `npx`:
+    Run directly with `npx`, or install globally:
     ```bash
     npx codebase-memory-mcp
     ```
+    ```bash
+    npm install -g codebase-memory-mcp
+    ```
   </Card>
-  <Card title="PyPI (uv)" icon="python">
-    No install required — run directly with `uvx`:
+  <Card title="PyPI" icon="python">
+    Install with `pip` or `pipx`, or run directly with `uvx`:
+    ```bash
+    pip install codebase-memory-mcp
+    ```
     ```bash
     uvx codebase-memory-mcp
     ```
@@ -127,7 +134,7 @@ Every release publishes pre-built, statically-linked binaries for all supported 
   </Card>
   <Card title="Winget (Windows)" icon="windows">
     ```powershell
-    winget install codebase-memory-mcp
+    winget install DeusData.CodebaseMemoryMcp
     ```
   </Card>
   <Card title="Chocolatey (Windows)" icon="windows">
@@ -137,7 +144,7 @@ Every release publishes pre-built, statically-linked binaries for all supported 
   </Card>
   <Card title="go install" icon="code">
     ```bash
-    go install github.com/DeusData/codebase-memory-mcp@latest
+    go install github.com/DeusData/codebase-memory-mcp/pkg/go/cmd/codebase-memory-mcp@latest
     ```
   </Card>
 </CardGroup>

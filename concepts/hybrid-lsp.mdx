@@ -1,7 +1,7 @@
 ---
-title: "Hybrid LSP: Semantic Type Resolution Without a Language Server"
+title: "Hybrid LSP: Type Resolution Without a Language Server"
 sidebarTitle: "Hybrid LSP"
-description: "Hybrid LSP resolves types, generics, and inheritance across files inside the static binary — no language server process, no per-project setup, no API keys."
+description: "Hybrid LSP resolves types, generics, and inheritance across files in the static binary — no language server process, no per-project setup, no API key."
 ---
 
 Tree-sitter gives you a precise syntactic AST for any of the 158 languages Codebase Memory MCP understands — fast, correct, and zero-configuration. But syntax alone has a ceiling. When your code calls `user.profile.display_name()`, tree-sitter can see the call site. What it cannot tell you is that `profile` is of type `Profile` (declared in a different module), and that `display_name` resolves to `Profile.display_name` three files away — because that requires tracking imports, following generics, walking inheritance chains, and understanding stdlib type annotations. Without that knowledge, the `CALLS` edge in your graph points to an ambiguous short name rather than the precise qualified target.
@@ -19,7 +19,7 @@ The indexing pipeline applies two distinct passes to every file:
     Fast, syntactic, and universal — runs for every one of the 158 supported languages. Extracts definitions (functions, classes, methods, types), call sites, import declarations, and structural edges (`DEFINES`, `CONTAINS_*`, `IMPORTS`). This pass is always active.
   </Step>
   <Step title="Hybrid LSP pass">
-    Type-aware and language-specific. Runs above the tree-sitter pass for the eleven supported languages. Consumes the import graph and a pre-built cross-file definition registry to refine call edges: `CALLS` edges get resolved to fully-qualified targets, `USAGE` edges are typed, and `RESOLVED_CALLS` records the resolution strategy and confidence score. Languages without a Hybrid LSP pass fall back gracefully to textual resolution — you always get *some* answer.
+    Type-aware and language-specific. Runs above the tree-sitter pass for the nine supported languages. Consumes the import graph and a pre-built cross-file definition registry to refine call edges: `CALLS` edges get resolved to fully-qualified targets, `USAGE` edges are typed, and `RESOLVED_CALLS` records the resolution strategy and confidence score. Languages without a Hybrid LSP pass fall back gracefully to textual resolution — you always get *some* answer.
   </Step>
 </Steps>
 
@@ -30,7 +30,7 @@ The cross-file Hybrid LSP build happens once per index run, using a module-def i
 ## Languages
 
 <Note>
-All eleven languages are available out of the box — no additional downloads, no language server processes, no configuration. Hybrid LSP is compiled into the binary.
+All nine languages are available out of the box — no additional downloads, no language server processes, no configuration. Hybrid LSP is compiled into the binary.
 </Note>
 
 | Language | What Hybrid LSP Handles |
@@ -61,7 +61,7 @@ With Hybrid LSP, the resolution chain looks like this:
 That edge is now traversable by `trace_path`, accurate for dead-code detection, and correctly counted in `display_name`'s in-degree — making it visible to hotspot analysis.
 
 ```cypher
--- Find all callers of Profile.display_name resolved via Hybrid LSP
+// Find all callers of Profile.display_name resolved via Hybrid LSP
 MATCH (caller)-[e:CALLS]->(target)
 WHERE target.qualified_name = 'myapp.models.profile.Profile.display_name'
 RETURN caller.name, e.confidence, e.strategy
